@@ -287,38 +287,28 @@ function apiError(code, message) {
  */
 
 /**
- * 화면에서 온 이관 데이터를 정리한다. 허용된 항목만 남기고 길이를 자른다.
- * (화면이 몰래 넣은 열, 예를 들어 주민번호가 있어도 여기서 버려진다.)
- * 반환: { ok, error, parsed }
+ * 화면에서 온 엑셀 행(2차원 배열)을 정리한다. 글자·숫자·불리언만 남기고 길이를 자른다.
+ * 화면은 주민번호 열을 지운 뒤 보내지만, 서버도 주민번호 모양의 값이 하나라도 있으면 거부한다.
+ * 반환: { ok, error, rows }
  */
-function sanitizeLegacyParsed(parsed) {
-  var cut = function (v, n) { return String(v == null ? '' : v).slice(0, n); };
-  if (!parsed || !Array.isArray(parsed.sessions)) return { ok: false, error: '이관 데이터 형식이 맞지 않아요.' };
-  if (parsed.sessions.length > 20) return { ok: false, error: '회차가 너무 많아요 (최대 20개).' };
-  var total = 0, sessions = [];
-  for (var i = 0; i < parsed.sessions.length; i++) {
-    var s = parsed.sessions[i];
-    if (!s || !Array.isArray(s.rows)) return { ok: false, error: '이관 데이터 형식이 맞지 않아요.' };
-    total += s.rows.length;
-    if (total > 500) return { ok: false, error: '행이 너무 많아요 (최대 500행).' };
-    sessions.push({
-      title: cut(s.title, 100), rowNo: +s.rowNo || 0,
-      missing: Array.isArray(s.missing) ? s.missing.slice(0, 20).map(function (x) { return cut(x, 30); }) : [],
-      rows: s.rows.map(function (r) {
-        r = r || {};
-        return {
-          rowNo: +r.rowNo || 0, name: cut(r.name, 60), phone: cut(r.phone, 30), email: cut(r.email, 100),
-          gender: cut(r.gender, 4), birth: cut(r.birth, 10),
-          m1: !!r.m1, car: !!r.car, exp: !!r.exp, int: !!r.int, pay: cut(r.pay, 60), m2: !!r.m2
-        };
-      })
-    });
+function sanitizeLegacyRows(rows) {
+  var bad = function (e) { return { ok: false, error: e }; };
+  if (!Array.isArray(rows)) return bad('이관 데이터 형식이 맞지 않아요.');
+  if (rows.length > 2000) return bad('행이 너무 많아요 (최대 2,000행).');
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r == null) { out.push([]); continue; }
+    if (!Array.isArray(r) || r.length > 30) return bad('이관 데이터 형식이 맞지 않아요.');
+    out.push(r.map(function (c) {
+      var t = typeof c;
+      if (t === 'number' || t === 'boolean') return c;
+      if (t === 'string') return c.slice(0, 200);
+      return '';
+    }));
   }
-  var warnings = (Array.isArray(parsed.warnings) ? parsed.warnings : []).slice(0, 100).map(function (w) {
-    w = w || {};
-    return { code: cut(w.code, 20), rowNo: +w.rowNo || 0, msg: cut(w.msg, 200) };
-  });
-  return { ok: true, parsed: { sessions: sessions, warnings: warnings } };
+  if (containsRrn(out)) return bad('주민번호 모양의 값이 들어 있어요. 이관을 중단했어요. 엑셀의 주민번호 열이 전송되지 않았는지 확인해 주세요.');
+  return { ok: true, rows: out };
 }
 
 /** 엑셀 헤더 이름. 주민번호('주민번호') 열은 일부러 목록에 넣지 않는다. */

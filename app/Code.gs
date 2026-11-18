@@ -9,7 +9,7 @@
  * 2차에서 막히면 "등록된 운영진이 아닙니다" 안내 화면이 나온다.
  */
 
-var APP_VERSION = '0.1.4 (0단계 완료)';
+var APP_VERSION = '0.2.0 (1단계 개발 중)';
 
 /**
  * 진입점. 코드 안에서 생기는 오류는 날것의 오류 화면 대신 안내 화면을 보여 주고,
@@ -44,10 +44,16 @@ function route_() {
   }
   if (!staffRow) return page_('denied', { reason: 'notstaff', email: email });
 
-  return page_('app', statusFor_(email, staffRow));
+  // 화면은 열린 뒤 getBootstrap()으로 데이터를 불러온다. 여기서는 데이터를 넣지 않는다.
+  return page_('app', { version: APP_VERSION });
 }
 
-/** 접속 성공 화면에 보여 줄 상태 (개인정보 없음) */
+/** 시스템 상태 점검 (소유자 전용, 개인정보 없음): 탭 열 이름이 정의와 맞는지, 주민번호 파일에 접근되는지 */
+function getSystemStatus() {
+  var who = requireOwner_();
+  return statusFor_(who.email, who.row);
+}
+
 function statusFor_(email, staffRow) {
   var db = { ok: false, tabs: [], error: '' };
   try {

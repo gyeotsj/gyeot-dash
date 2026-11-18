@@ -105,9 +105,9 @@ function runSelfTest() {
     // 기존 엑셀 이관 (가짜 데이터, 프로그램 g로 시험해서 실제 회차와 겹치지 않게 한다)
     withLock_(function () { setConfigUnlocked_('legacy_imported', ''); setConfigUnlocked_('legacy_import_manifest', ''); });
     var HEAD = ['', '신청자명', '주민번호', '연락처', '메일', '성별', '출생연도', '1차 안내메일', '자차', '고속', '시외', '참가비 이체', '최종 안내메일'];
-    var RR = function (name, phone, o) {
+    var RR = function (name, phone, o) {      // 주민번호 칸은 화면이 지운 것처럼 비워 둔다
       o = o || {};
-      return ['', name, '900101-1234567', phone, name + '@example.com', '여', 1995, 'ㅇ', o.car || '', o.exp || '', '', o.pay === undefined ? 'ㅇ' : o.pay, o.m2 === false ? '' : 'ㅇ'];
+      return ['', name, '', phone, name + '@example.com', '여', 1995, 'ㅇ', o.car || '', o.exp || '', '', o.pay === undefined ? 'ㅇ' : o.pay, o.m2 === false ? '' : 'ㅇ'];
     };
     var fake = [
       ['', '1회차 | 10/6(화)-8(목)'], HEAD,
@@ -115,17 +115,18 @@ function runSelfTest() {
       RR('다라마', '010-1111-0003', { pay: 'ㅇ 25000원 환불' }), RR('라마바', '010-1111-0004', { pay: 'ㅇ 50000원 환불' }),
       ['', '2회차 | 10/12(월)-14(수)'], HEAD, RR('가나다', '01011110001'), RR('바사아', '010-1111-0006')
     ];
-    var legacyParsed = parseLegacySheet(fake);
-    check('이관: 엑셀을 읽은 결과에 주민번호가 없다', JSON.stringify(legacyParsed).indexOf('900101') < 0);
-    var payload = { parsed: legacyParsed, opts: { program_id: 'g', year: 2026, fee: 50000, cap: 7 } };
+    var payload = { rows: fake, opts: { program_id: 'g', year: 2026, fee: 50000, cap: 7 } };
     var base = { s: readTab_('Sessions').length, p: readTab_('People').length, e: readTab_('Enrollments').length };
 
     var pv = previewLegacyImport(payload);
     check('이관 미리보기: 오류 없음, 회차 2·사람 5·참여 6', pv.ok && pv.counts.sessions === 2 && pv.counts.people === 5 && pv.counts.enrollments === 6, JSON.stringify(pv.counts));
     check('이관 미리보기: 저장하지 않는다', readTab_('Sessions').length === base.s && readTab_('Enrollments').length === base.e);
     check('이관 미리보기: 이름·연락처를 돌려주지 않는다', !/가나다|나다라|다라마|라마바|바사아|010-1111/.test(JSON.stringify(pv)));
-    expectError('이관: 서버에 몰래 주민번호 모양이 오면 거부', 'INVALID', function () {
-      var bad = JSON.parse(JSON.stringify(payload)); bad.parsed.sessions[0].rows[0].email = '900101-1234567'; commitLegacyImport(bad);
+    expectError('이관: 주민번호 열이 지워지지 않은 채 오면 서버가 거부', 'INVALID', function () {
+      var bad = JSON.parse(JSON.stringify(payload)); bad.rows[2][2] = '900101-1234567'; commitLegacyImport(bad);
+    });
+    expectError('이관: 다른 칸에 주민번호 모양이 섞여 와도 거부', 'INVALID', function () {
+      var bad = JSON.parse(JSON.stringify(payload)); bad.rows[2][4] = '9001011234567'; previewLegacyImport(bad);
     });
 
     var cm = commitLegacyImport(payload);

@@ -1,15 +1,16 @@
 /**
  * 기존 엑셀 이관 (F8). 소유자 전용, 1회용.
  *
- * 흐름: 화면(브라우저)이 엑셀을 읽어 parseLegacySheet 로 정리한다 → 주민번호 열은 읽지 않으므로 서버로 오지 않는다.
- *       서버는 받은 데이터를 다시 정리·검사하고 buildLegacyPlan 으로 규칙을 적용한다. (규칙: PRD.md "기존 엑셀 이관 규칙")
+ * 흐름: 화면(브라우저)이 엑셀을 읽고 **주민번호 열을 지운 행**을 보낸다 → 주민번호는 서버로 오지 않는다.
+ *       서버는 받은 행을 검사(주민번호 모양이 있으면 거부)하고 parseLegacySheet 로 읽은 뒤
+ *       buildLegacyPlan 으로 규칙을 적용한다. (규칙: PRD.md "기존 엑셀 이관 규칙")
  *
  * 안전장치: 실행 직전 운영 DB 백업 / 이미 이관했으면 거부 / 중간에 실패하면 쓴 행을 되돌림 /
  *           이관한 행의 ID를 Config(legacy_import_manifest)에 기록해 두었다가 undoLegacyImport 로 이관분만 되돌림
  */
 
 function legacyPlanFromPayload_(payload) {
-  if (!payload || !payload.parsed || !payload.opts) throw apiError('INVALID', '이관 요청 형식이 맞지 않아요.');
+  if (!payload || !payload.rows || !payload.opts) throw apiError('INVALID', '이관 요청 형식이 맞지 않아요.');
   var o = payload.opts;
   if (PROGRAM_IDS.indexOf(o.program_id) < 0) throw apiError('INVALID', '프로그램이 올바르지 않아요.');
   var fee = validateValue(SESSION_RULES.fee, o.fee), cap = validateValue(SESSION_RULES.cap, o.cap);
@@ -18,10 +19,10 @@ function legacyPlanFromPayload_(payload) {
   if (!cap.ok) throw apiError('INVALID', '정원: ' + cap.error);
   if (!year.ok) throw apiError('INVALID', '연도: ' + year.error);
 
-  var clean = sanitizeLegacyParsed(payload.parsed);
+  var clean = sanitizeLegacyRows(payload.rows);
   if (!clean.ok) throw apiError('INVALID', clean.error);
 
-  return buildLegacyPlan(clean.parsed, {
+  return buildLegacyPlan(parseLegacySheet(clean.rows), {
     program_id: o.program_id, year: year.value, fee: fee.value, cap: cap.value,
     today: todayKst(), now: nowStr_(), makeId: makeId
   });

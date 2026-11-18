@@ -1,0 +1,641 @@
+<script>
+/**
+ * 화면 그리기와 서버 호출. 계산은 Logic.html, 서버 규칙은 *.gs 에 있다.
+ * 규칙: 서버에서 온 모든 값은 esc()를 거쳐서 화면에 넣는다. (이름에 스크립트가 들어 있어도 실행되지 않게)
+ */
+
+/* ===================== 아이콘 ===================== */
+var IC = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
+  cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.5a3.5 3.5 0 010 7M18 14.5c2 .6 3.5 2.4 3.5 5.5"/></svg>',
+  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18.5v.01"/></svg>',
+  car: '<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17h14M3 13l2-6h14l2 6v4H3z"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="16.5" cy="17" r="1.5"/></svg>',
+  chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M9 6l6 6-6 6"/></svg>'
+};
+
+/* ===================== 상태 ===================== */
+var S = {
+  boot: null, screen: 'dash', prog: 'all', sid: null, q: '',
+  drawer: null,          // { eid }  참여자 상세 패널
+  edit: false,           // 참여자 상세 수정 모드
+  sf: null,              // 회차 입력 패널 { mode: 'new' | 'edit', sid }
+  modal: null,           // { title, html, yes, danger, need }
+  pending: {},           // 저장 중인 참여 기록 (같은 행을 연달아 누를 때 충돌 방지)
+  busy: false,
+  imp: null              // 이관 화면 상태
+};
+var X = { person: {}, session: {}, prog: {} };
+var MODAL_FN = null;
+
+function reindex() {
+  X = { person: {}, session: {}, prog: {} };
+  S.boot.people.forEach(function (p) { X.person[p.person_id] = p; });
+  S.boot.sessions.forEach(function (s) { X.session[s.session_id] = s; });
+  S.boot.programs.forEach(function (p) { X.prog[p.program_id] = p; });
+}
+function progName(id) { return X.prog[id] ? X.prog[id].name : id; }
+function progColor(id) { return id === 'l' ? 'var(--c-l)' : id === 'g' ? 'var(--c-g)' : 'var(--c-w)'; }
+function isOwner() { return S.boot && S.boot.me.role === 'owner'; }
+function enrOf(eid) { return S.boot.enrollments.filter(function (e) { return e.enroll_id === eid; })[0]; }
+function replaceIn(list, key, row) {
+  for (var i = 0; i < list.length; i++) { if (list[i][key] === row[key]) { list[i] = row; return; } }
+  list.push(row);
+}
+function replaceEnr(row) { replaceIn(S.boot.enrollments, 'enroll_id', row); }
+function replacePerson(row) { replaceIn(S.boot.people, 'person_id', row); X.person[row.person_id] = row; }
+function replaceSession(row) { replaceIn(S.boot.sessions, 'session_id', row); X.session[row.session_id] = row; }
+function defaultSid() {
+  var l = sortSessions(S.boot.sessions, S.boot.today);
+  return l.length ? l[0].session_id : null;
+}
+
+/* ===================== 서버 호출 ===================== */
+function parseErr(e) {
+  var m = String((e && e.message) || e || '');
+  var x = /\[([A-Z_]+)\]\s*([\s\S]*)/.exec(m);
+  return { code: x ? x[1] : 'ERROR', msg: x ? x[2].trim() : m.replace(/^(Error|Exception):\s*/, '') };
+}
+function api(name) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) { reject(parseErr(e)); });
+    r[name].apply(r, args);
+  });
+}
+function fail(err) {
+  toast(err.msg || '저장하지 못했어요');
+  if (err.code === 'CONFLICT' || err.code === 'NOT_FOUND') loadBoot();
+}
+function loadBoot() {
+  return api('getBootstrap').then(function (b) {
+    S.boot = b; reindex();
+    if (!S.sid || !X.session[S.sid]) S.sid = defaultSid();
+    render();
+  }).catch(function (err) {
+    var r = document.getElementById('root');
+    r.innerHTML = '<div class="center"><div class="card deny"><div class="icon">!</div><h1>불러오지 못했어요</h1><p>' + esc(err.msg) + '</p>' +
+      '<p><button class="btn pri" data-act="reload">다시 불러오기</button></p></div></div>';
+  });
+}
+
+/* ===================== 작은 도우미 ===================== */
+function toast(msg) {
+  var el = document.getElementById('toast'); if (!el) return;
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(function () { el.classList.remove('show'); }, 2600);
+}
+function pct(d, t) { return t ? Math.round(d / t * 100) : 0; }
+function money(n) { return n === '' || n == null ? '' : Number(n).toLocaleString() + '원'; }
+function pchip(id) { return '<span class="pg"><i style="background:' + progColor(id) + '"></i>' + esc(progName(id)) + '</span>'; }
+function stateChip(st) {
+  if (st.done) return '<span class="chip">종료</span>';
+  if (st.ongoing) return '<span class="chip ok dot">진행 중</span>';
+  if (st.days <= 3) return '<span class="chip bad dot">D-' + st.days + '</span>';
+  if (st.days <= 10) return '<span class="chip warn dot">D-' + st.days + '</span>';
+  return '<span class="chip pri dot">D-' + st.days + '</span>';
+}
+function mini(list, key, st) {
+  var t = list.length, d = countDone(list, key), p = pct(d, t), cls = '';
+  if (!st.done && d < t) { if (st.days <= 3) cls = 'bad'; else if (st.days <= 10) cls = 'warn'; }
+  return '<div class="mini ' + cls + '"><div class="t"><i style="width:' + p + '%"></i></div><small>' + d + '/' + t + '</small></div>';
+}
+function personSub(p) {
+  var parts = [];
+  if (p.job) parts.push(p.job);
+  if (p.gender) parts.push(p.gender);
+  if (p.birth_year) parts.push(p.birth_year + '년생');
+  return parts.map(esc).join(' · ');
+}
+function transChip(v) { return v ? '<span class="chip ' + (v === '자차' ? '' : 'warn') + '">' + esc(v) + '</span>' : '<span class="chip">미정</span>'; }
+function consentChip(label, v) { return '<span class="chip ' + (v === 'Y' ? 'ok' : v === 'N' ? 'bad' : 'warn') + '">' + esc(label) + ' ' + consentLabel(v) + '</span>'; }
+
+/* ===================== 틀 ===================== */
+function render() {
+  var root = document.getElementById('root'); if (!root) return;
+  if (!S.boot) { root.innerHTML = '<div class="loading">불러오는 중…</div>'; return; }
+  var y = window.scrollY;
+  var screens = { dash: dashHtml, sess: sessHtml, people: peopleHtml, sessions: sessionsHtml, imp: importHtml };
+  root.innerHTML = '<div class="app">' + sideHtml() + '<main>' + (screens[S.screen] || dashHtml)() + '</main></div>' + overlayHtml();
+  window.scrollTo(0, y);
+}
+
+function sideHtml() {
+  var items = [['dash', '홈 대시보드', 'home'], ['sess', '회차 상세', 'cal'], ['people', '참여자', 'users'], ['sessions', '회차 관리', 'list']];
+  if (isOwner()) items.push(['imp', '기존 엑셀 이관', 'up']);
+  var me = S.boot.me;
+  return '<aside class="side"><div class="brand"><div class="logo">곁</div><div><b>곁마을 운영</b><span>내부 운영진 전용</span></div></div>' +
+    '<div class="nav-label">메뉴</div>' +
+    items.map(function (x) { return '<button class="nav ' + (S.screen === x[0] ? 'on' : '') + '" data-act="nav" data-to="' + x[0] + '">' + IC[x[2]] + '<span>' + x[1] + '</span></button>'; }).join('') +
+    '<div class="side-foot"><b>' + esc(me.name) + '</b> · ' + (me.role === 'owner' ? '소유자' : '운영진') + '<br>' + esc(me.email) + '<br>버전 ' + esc(typeof APP_VERSION === 'undefined' ? '' : APP_VERSION) + '</div></aside>';
+}
+
+function overlayHtml() {
+  var out = '';
+  if (S.drawer) out += drawerHtml();
+  if (S.sf) out += sessionFormHtml();
+  if (S.modal) out += modalHtml();
+  return out;
+}
+
+/* ===================== 홈 대시보드 ===================== */
+function dashHtml() {
+  var b = S.boot, t = b.today, k = dashKpi(b);
+  var list = sortSessions(b.sessions.filter(function (s) { return S.prog === 'all' || s.program_id === S.prog; }), t);
+  var progs = [['all', '전체']].concat(b.programs.map(function (p) { return [p.program_id, p.name]; }));
+
+  function kpi(label, main, desc, bar) {
+    return '<div class="card kpi"><div class="l">' + label + '</div><div class="v">' + main + '</div><div class="d">' + desc + '</div>' +
+      (bar != null ? '<div class="bar"><i style="width:' + bar + '%"></i></div>' : '') + '</div>';
+  }
+  var cards =
+    kpi('2주 안에 참여하는 사람', k.upcoming ? k.upcoming.people + '<small>명</small>' : '–', k.upcoming ? k.upcoming.sessions + '개 회차 진행 예정' : '진행 예정 회차가 없어요') +
+    kpi('참가비 입금 완료율', k.pay ? pct(k.pay.done, k.pay.total) + '<small>%</small>' : '–', k.pay ? '3주 안 회차 ' + k.pay.done + '/' + k.pay.total + '명' : '3주 안에 시작하는 회차가 없어요', k.pay ? pct(k.pay.done, k.pay.total) : null) +
+    kpi('여행자보험 가입률', k.ins ? pct(k.ins.done, k.ins.total) + '<small>%</small>' : '–', k.ins ? '2주 안 회차 ' + k.ins.done + '/' + k.ins.total + '명' : '2주 안에 시작하는 회차가 없어요', k.ins ? pct(k.ins.done, k.ins.total) : null) +
+    kpi('종료 회차 참석 정리', k.attend ? pct(k.attend.done, k.attend.total) + '<small>%</small>' : '–', k.attend ? '참석·불참 입력 ' + k.attend.done + '/' + k.attend.total + '명' : '종료된 회차가 없어요', k.attend ? pct(k.attend.done, k.attend.total) : null);
+
+  var rows = list.map(function (s) {
+    var st = sessionState(s, t), a = activeOf(b.enrollments, s.session_id), c = cancelledOf(b.enrollments, s.session_id);
+    return '<tr class="click" data-act="sess" data-sid="' + esc(s.session_id) + '">' +
+      '<td class="nw"><div style="font-weight:700">' + esc(s.n) + '회차</div>' + pchip(s.program_id) + '</td>' +
+      '<td class="nw">' + esc(fmtRange(s.start, s.end)) + '</td><td>' + stateChip(st) + '</td>' +
+      '<td class="nw"><b>' + a.length + '</b><span class="muted">' + (s.cap ? '/' + esc(s.cap) : '') + '</span>' + (c.length ? ' <span class="tag">취소 ' + c.length + '</span>' : '') + '</td>' +
+      '<td>' + mini(a, 'pay', st) + '</td><td>' + mini(a, 'ins', st) + '</td><td>' + mini(a, 'm2', st) + '</td>' +
+      '<td>' + (st.started ? mini(a, 'attend', st) : '<span class="muted">–</span>') + '</td></tr>';
+  }).join('');
+
+  var table = list.length
+    ? '<div class="card"><div class="card-h"><h2>회차 현황</h2><span class="chip">' + list.length + '개</span><div class="sp"></div><span class="muted" style="font-size:12.5px">행을 누르면 회차 상세로 이동</span></div>' +
+      '<div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>회차</th><th>일정</th><th>상태</th><th>참여 인원</th><th>입금</th><th>보험</th><th>최종 안내</th><th>참석</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>'
+    : '<div class="card"><div class="empty"><b>아직 회차가 없어요</b>회차를 추가하거나, 기존 엑셀의 명단을 이관해 시작하세요.' +
+      '<div class="row"><button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button>' + (isOwner() && !b.config.legacy_imported ? '<button class="btn" data-act="nav" data-to="imp">' + IC.up + ' 기존 엑셀 이관</button>' : '') + '</div></div></div>';
+
+  return '<div class="top"><div><h1>홈 대시보드</h1><div class="sub">모집부터 참여까지, 회차가 지금 어디까지 진행됐는지 한눈에 봅니다.</div></div><div class="sp"></div>' +
+    '<div class="acts"><div class="seg">' + progs.map(function (p) { return '<button class="' + (S.prog === p[0] ? 'on' : '') + '" data-act="prog" data-id="' + esc(p[0]) + '">' + esc(p[1]) + '</button>'; }).join('') + '</div>' +
+    '<button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button></div></div>' +
+    '<div class="grid g4" style="margin-bottom:16px">' + cards + '</div>' + table;
+}
+
+/* ===================== 회차 상세 ===================== */
+function sessHtml() {
+  var b = S.boot, s = X.session[S.sid];
+  if (!s) {
+    return '<div class="top"><div><h1>회차 상세</h1></div></div><div class="card"><div class="empty"><b>회차를 선택해 주세요</b>홈 대시보드에서 회차를 누르거나, 회차를 먼저 추가하세요.' +
+      '<div class="row"><button class="btn" data-act="nav" data-to="dash">홈으로</button><button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button></div></div></div>';
+  }
+  var t = b.today, st = sessionState(s, t);
+  var all = b.enrollments.filter(function (e) { return e.session_id === s.session_id; });
+  var act = activeOf(b.enrollments, s.session_id);
+  var canc = cancelledOf(b.enrollments, s.session_id);
+  var rd = refundDeadline(s, b.config.refund_days), rdd = diffDays(rd, t);
+  var pick = pickupCounts(act);
+  var sibs = sortSessions(b.sessions.filter(function (x) { return x.program_id === s.program_id; }), t).sort(function (a, c) { return Number(a.n) - Number(c.n); });
+  var sorted = act.concat(canc);
+
+  var rdNote = st.done ? '' : ' · 환불 가능 기한 <b style="color:' + (rdd >= 0 && rdd <= 1 ? 'var(--bad)' : 'inherit') + '">' + esc(fmtMD(rd)) + (rdd === 0 ? ' (오늘)' : '') + '</b> <span class="muted">(시작 ' + b.config.refund_days + '일 전까지 100%)</span>';
+  var bulk = st.started
+    ? '<button class="btn" data-act="bulk" data-v="true">' + IC.check.replace('<svg', '<svg width="15" height="15"') + ' 참석 전원 처리</button><button class="btn" data-act="bulk" data-v="">참석 전원 해제</button>' : '';
+
+  function sum(label, val, small) { return '<div class="card"><div class="l">' + label + '</div><div class="v">' + val + '<small> ' + small + '</small></div></div>'; }
+  var cards = '<div class="sum">' +
+    sum('참여 인원', act.length, s.cap ? '/ ' + esc(s.cap) + '명' : '명') +
+    sum('참가비 입금', countDone(act, 'pay'), '/ ' + act.length) +
+    sum('여행자보험', countDone(act, 'ins'), '/ ' + act.length) +
+    sum('최종 안내', countDone(act, 'm2'), '/ ' + act.length) +
+    '<div class="card"><div class="l">' + IC.car + ' 픽업 필요</div><div class="v" style="color:' + (pick.pickup ? 'var(--warn)' : 'inherit') + '">' + pick.pickup + '<small>명</small></div>' +
+    '<div class="pick"><span class="chip">고속터미널 ' + pick.exp + '</span><span class="chip">시외터미널 ' + pick.int + '</span><span class="chip">자차 ' + pick.car + '</span>' + (pick.blank ? '<span class="chip warn">미정 ' + pick.blank + '</span>' : '') + '</div></div></div>';
+
+  function stepBtn(e, key) {
+    var on = stepDone(e, key), busy = S.pending[e.enroll_id] ? ' disabled' : '';
+    var late = !on && !st.done && st.days <= 3 && (key === 'pay' || key === 'ins');
+    return '<button class="sb ' + (on ? 'on' : '') + (late ? ' late' : '') + '" data-act="step" data-eid="' + esc(e.enroll_id) + '" data-step="' + key + '"' + busy + '>' + IC.check + '</button>';
+  }
+  function attendBtn(e) {
+    if (!st.started) return '<span class="dash">–</span>';
+    var v = e.attend;
+    return '<button class="attend-btn ' + (v === '참석' ? 'on' : v === '불참' ? 'no' : '') + '" data-act="attend" data-eid="' + esc(e.enroll_id) + '"' + (S.pending[e.enroll_id] ? ' disabled' : '') + '>' + (v || '미정') + '</button>';
+  }
+  var body = sorted.map(function (e) {
+    var p = X.person[e.person_id] || { name: '(알 수 없음)', phone: '' };
+    var cx = isCancelled(e);
+    var nameCell = '<td><div class="name"><div class="av">' + esc((p.name || '?').charAt(0)) + '</div><div><b>' + esc(p.name) + (cx ? ' <span class="chip bad" style="margin-left:4px">취소</span>' : '') + '</b><small>' + personSub(p) + '</small></div></div></td>';
+    var trans = '<td data-act="none"><select class="tsel ' + (e.transport && e.transport !== '자차' ? 'warn' : '') + '" data-act="transport" data-eid="' + esc(e.enroll_id) + '"' + (cx || S.pending[e.enroll_id] ? ' disabled' : '') + ' title="이동수단 변경">' +
+      ['', '자차', '고속터미널', '시외터미널'].map(function (v) { return '<option value="' + v + '"' + (e.transport === v ? ' selected' : '') + '>' + (v || '미정') + '</option>'; }).join('') + '</select></td>';
+    var steps = cx
+      ? '<td colspan="6" class="muted">취소 사유: ' + esc(e.cancel_reason) + (e.refund_amount !== '' ? ' · 환불 ' + esc(money(e.refund_amount)) : '') + '</td>'
+      : '<td class="c" data-act="none"><span class="sb on fix" title="합격">' + IC.check + '</span></td>' +
+        ['m1', 'pay', 'ins', 'm2'].map(function (k) { return '<td class="c" data-act="none">' + stepBtn(e, k) + '</td>'; }).join('') +
+        '<td class="c" data-act="none">' + attendBtn(e) + '</td>';
+    return '<tr class="click ' + (cx ? 'cx' : '') + '" data-act="who" data-eid="' + esc(e.enroll_id) + '">' + nameCell + '<td class="muted nw">' + esc(p.phone) + '</td>' + trans + steps + '</tr>';
+  }).join('');
+
+  return '<div class="crumb"><a data-act="nav" data-to="dash">홈</a> ' + IC.chev + ' <span>' + esc(progName(s.program_id)) + '</span> ' + IC.chev + ' <span>' + esc(s.n) + '회차</span></div>' +
+    '<div class="top"><div><h1>' + pchip(s.program_id) + ' <span style="margin-left:2px">' + esc(s.n) + '회차</span> &nbsp;' + stateChip(st) + '</h1>' +
+    '<div class="sub">' + esc(fmtRange(s.start, s.end)) + ' · 참가비 ' + esc(money(s.fee) || '미정') + rdNote + '</div></div><div class="sp"></div>' +
+    '<div class="acts"><div class="seg">' + sibs.map(function (x) { return '<button class="' + (x.session_id === s.session_id ? 'on' : '') + '" data-act="sess" data-sid="' + esc(x.session_id) + '">' + esc(x.n) + '회</button>'; }).join('') + '</div>' +
+    bulk + '<button class="btn" data-act="sf-edit" data-sid="' + esc(s.session_id) + '">' + IC.pencil + ' 회차 수정</button></div></div>' +
+    cards +
+    (all.length
+      ? '<div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>참여자</th><th>연락처</th><th>이동수단</th><th class="c">합격</th><th class="c">1차 안내</th><th class="c">입금</th><th class="c">보험</th><th class="c">최종 안내</th><th class="c">참석</th></tr></thead><tbody>' + body + '</tbody></table></div></div>' +
+        '<div class="muted" style="margin-top:10px;font-size:12.5px">체크 버튼을 누르면 단계가 완료/미완료로 바뀌고, 이동수단은 목록에서 바로 바꿀 수 있어요. 참석은 프로그램이 시작된 뒤에 누를 때마다 미정 → 참석 → 불참 순으로 바뀝니다. 이름을 누르면 상세 정보를 보고 수정할 수 있어요.</div>'
+      : '<div class="card"><div class="empty"><b>이 회차에는 아직 참여자가 없어요</b>신청 엑셀 업로드는 다음 단계(2단계)에서 제공됩니다.</div></div>');
+}
+
+/* ===================== 참여자 ===================== */
+function peopleHtml() {
+  var b = S.boot, q = S.q.trim();
+  var list = b.people.slice().sort(function (a, c) { return String(a.name).localeCompare(String(c.name), 'ko'); });
+  if (q) list = list.filter(function (p) { return String(p.name).indexOf(q) >= 0 || digits(p.phone).indexOf(digits(q)) >= 0 && digits(q) !== ''; });
+  var rows = list.slice(0, 200).map(function (p) {
+    var hist = historyOf(b, p.person_id);
+    var chips = hist.map(function (h) {
+      var s = h.session;
+      return '<span class="chip" style="' + (isCancelled(h.enr) ? 'text-decoration:line-through;opacity:.6' : '') + '"><i style="width:7px;height:7px;border-radius:99px;background:' + progColor(s && s.program_id) + ';display:inline-block"></i>' + esc(s ? progName(s.program_id) + ' ' + s.n + '회' : '?') + '</span>';
+    }).join(' ');
+    var last = hist[0];
+    return '<tr class="click" data-act="who" data-eid="' + esc(last ? last.enr.enroll_id : '') + '"><td><div class="name"><div class="av">' + esc(String(p.name).charAt(0)) + '</div><div><b>' + esc(p.name) + '</b><small>' + personSub(p) + '</small></div></div></td>' +
+      '<td class="muted nw">' + esc(p.phone) + '</td><td><div class="pill-row">' + chips + '</div></td>' +
+      '<td>' + consentChip('추가 보유', p.consent_retain) + '</td></tr>';
+  }).join('');
+  return '<div class="top"><div><h1>참여자</h1><div class="sub">한 사람이 여러 프로그램·회차에 참여한 이력을 함께 봅니다.</div></div><div class="sp"></div>' +
+    '<input type="text" id="q" placeholder="이름 또는 연락처 검색" value="' + esc(S.q) + '" style="width:260px"></div>' +
+    (list.length ? '<div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>이름</th><th>연락처</th><th>참여 이력</th><th>개인정보 추가 보유</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
+      '<div class="muted" style="margin-top:10px;font-size:12.5px">' + list.length + '명' + (list.length > 200 ? ' 중 200명 표시' : '') + ' · 주민번호는 이 화면 어디에도 표시되지 않습니다.</div>'
+      : '<div class="card"><div class="empty"><b>' + (q ? '검색 결과가 없어요' : '아직 참여자가 없어요') + '</b></div></div>');
+}
+
+/* ===================== 참여자 상세 패널 (보기 / 수정) ===================== */
+function drawerHtml() {
+  var e = enrOf(S.drawer.eid);
+  if (!e) return '';
+  var p = X.person[e.person_id] || {}, s = X.session[e.session_id] || {};
+  var t = S.boot.today, st = s.start ? sessionState(s, t) : { done: false, started: false };
+  var cx = isCancelled(e), E = S.edit;
+  var head = '<div class="row" style="justify-content:space-between;align-items:flex-start"><div class="name"><div class="av" style="width:44px;height:44px;font-size:17px">' + esc(String(p.name || '?').charAt(0)) + '</div><div><h3>' + esc(p.name) + '</h3><span class="muted">' + pchip(s.program_id) + ' · ' + esc(s.n) + '회차 ' + (cx ? '· 취소' : '') + '</span></div></div>' +
+    '<div class="row" style="gap:6px">' + (E
+      ? '<button class="btn sm" data-act="edit-cancel">취소</button><button class="btn sm pri" data-act="edit-save"' + (S.busy ? ' disabled' : '') + '>저장</button>'
+      : '<button class="btn sm" data-act="edit">' + IC.pencil + ' 수정</button><button class="btn sm ghost" data-act="close-drawer">' + IC.x + '</button>') + '</div></div>';
+
+  var body;
+  if (E) {
+    var inp = function (id, v, type) { return '<input type="' + (type || 'text') + '" id="' + id + '" value="' + esc(v) + '">'; };
+    var sel = function (id, opts, v) { return '<select id="' + id + '">' + opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(v) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>'; };
+    var yn = [['', '미확인'], ['Y', '동의'], ['N', '미동의']];
+    body = '<div class="edit-ban">수정 중입니다. <b>이름·연락처·이메일·직업·거주지·동의 항목</b>은 이 사람의 모든 회차에 적용되고, <b>이동수단·신청 상태·금액·남긴 말</b>은 이 회차에만 적용돼요.</div>' +
+      '<div class="sec">기본 정보 (모든 회차 공통)</div><dl class="kv">' +
+      '<dt>이름</dt><dd>' + inp('e-name', p.name) + '</dd><dt>연락처</dt><dd>' + inp('e-phone', p.phone) + '</dd><dt>이메일</dt><dd>' + inp('e-email', p.email) + '</dd>' +
+      '<dt>직업</dt><dd>' + inp('e-job', p.job) + '</dd><dt>거주지</dt><dd>' + inp('e-area', p.area) + '</dd>' +
+      '<dt>성별 · 출생</dt><dd class="muted">' + personSub({ gender: p.gender, birth_year: p.birth_year }) + ' (신청서 기준)</dd>' +
+      '<dt>추가 보유</dt><dd>' + sel('e-consent', yn, p.consent_retain) + '</dd><dt>초상권</dt><dd>' + sel('e-portrait', yn, p.consent_portrait) + '</dd></dl>' +
+      '<div class="sec">이 회차 정보</div><dl class="kv">' +
+      '<dt>이동수단</dt><dd>' + sel('e-trans', [['', '미정'], ['자차', '자차'], ['고속터미널', '속초 고속터미널'], ['시외터미널', '속초 시외터미널']], e.transport) + '</dd>' +
+      '<dt>신청 상태</dt><dd>' + sel('e-status', [['o', '참여'], ['x', '취소']], cx ? 'x' : 'o') + '</dd>' +
+      '<dt>취소 사유</dt><dd>' + inp('e-reason', e.cancel_reason) + '</dd>' +
+      '<dt>입금액</dt><dd>' + inp('e-pay', e.pay_amount, 'number') + '</dd><dt>환불액</dt><dd>' + inp('e-refund', e.refund_amount, 'number') + '</dd>' +
+      '<dt>남긴 말</dt><dd><textarea id="e-memo">' + esc(e.memo) + '</textarea></dd></dl>';
+  } else {
+    var steps = [['신청 접수', e.applied_at], ['합격 확정', e.pass === '합격' ? '확정' : ''], ['1차 안내 메일', e.m1_at], ['참가비 입금', e.pay_at], ['여행자보험 가입', e.ins_at], ['최종 안내', e.m2_at],
+      ['참석', e.attend === '참석' ? '참석' : e.attend === '불참' ? '불참' : '']];
+    var tl = steps.map(function (x) {
+      var v = x[1], on = !!v && v !== '불참';
+      var d = !v ? (x[0] === '참석' ? (st.started ? '미정' : '프로그램 시작 후') : x[0] === '신청 접수' ? '기록 없음' : '대기') : (/^\d{4}-/.test(v) ? fmtMD(v) : v);
+      return '<li class="' + (on ? 'on' : '') + '"><span class="dotx">' + IC.check + '</span>' + x[0] + '<span class="d">' + esc(d) + '</span></li>';
+    }).join('');
+    var rd = s.start ? refundDeadline(s, S.boot.config.refund_days) : '', rdd = rd ? diffDays(rd, t) : -1;
+    var refund = cx ? '취소됨 (' + esc(e.cancel_reason) + ')' + (e.refund_amount !== '' ? ' · 환불 ' + esc(money(e.refund_amount)) : '')
+      : e.refund_amount !== '' ? '부분 환불 ' + esc(money(e.refund_amount)) + ' 처리됨'
+      : st.done ? '종료된 회차예요.'
+      : rdd >= 0 ? esc(fmtMD(rd)) + '까지 취소하면 <b>100% 환불</b>됩니다. (' + (rdd === 0 ? '오늘이 마지막 날' : 'D-' + rdd) + ')' : '환불 가능 기한이 지나 환불이 불가합니다.';
+    body = '<dl class="kv"><dt>연락처</dt><dd>' + esc(p.phone) + '</dd><dt>이메일</dt><dd>' + esc(p.email || '–') + '</dd><dt>성별 · 출생</dt><dd>' + (personSub({ gender: p.gender, birth_year: p.birth_year }) || '–') + '</dd>' +
+      '<dt>직업 · 거주지</dt><dd>' + esc([p.job, p.area].filter(String).join(' · ') || '–') + '</dd>' +
+      '<dt>이동수단</dt><dd>' + transChip(e.transport) + (e.transport && e.transport !== '자차' ? ' <span class="muted" style="font-size:12.5px">운영진 픽업 필요</span>' : '') + '</dd>' +
+      '<dt>입금 · 환불</dt><dd>' + esc(money(e.pay_amount) || '–') + (e.refund_amount !== '' ? ' / 환불 ' + esc(money(e.refund_amount)) : '') + '</dd>' +
+      '<dt>동의 항목</dt><dd>' + consentChip('추가 보유', p.consent_retain) + ' ' + consentChip('초상권', p.consent_portrait) + '</dd></dl>' +
+      '<div class="sec">진행 단계</div><ul class="tl">' + tl + '</ul>' +
+      '<div class="sec">남긴 말</div><div class="note">' + (e.memo ? esc(e.memo) : '남긴 말이 없어요.') + '</div>' +
+      '<div class="sec">환불 안내</div><div class="note">' + refund + '</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:14px">마지막 수정 ' + esc(e.updated_at || '–') + (e.updated_by ? ' · ' + esc(e.updated_by) : '') + '</div>';
+  }
+  return '<div id="drawer" class="open"><div class="dim" ' + (E ? '' : 'data-act="close-drawer"') + '></div><div class="panel">' + head + body + '</div></div>';
+}
+
+function openWho(eid) { S.drawer = { eid: eid }; S.edit = false; render(); }
+
+function saveEdit() {
+  if (S.busy) return;
+  var e = enrOf(S.drawer.eid), p = X.person[e.person_id];
+  var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+  var pp = {}, ep = {};
+  [['name', 'e-name'], ['phone', 'e-phone'], ['email', 'e-email'], ['job', 'e-job'], ['area', 'e-area'], ['consent_retain', 'e-consent'], ['consent_portrait', 'e-portrait']].forEach(function (m) {
+    var nv = v(m[1]); if (String(p[m[0]] == null ? '' : p[m[0]]) !== nv) pp[m[0]] = nv;
+  });
+  var tr = v('e-trans'); if (tr !== (e.transport || '')) ep.transport = tr;
+  var cancelNow = v('e-status') === 'x', reason = v('e-reason').trim();
+  var newReason = cancelNow ? (reason || '사유 미입력') : '';
+  if (newReason !== (e.cancel_reason || '')) ep.cancel_reason = newReason;
+  var pay = v('e-pay'); if (String(e.pay_amount == null ? '' : e.pay_amount) !== pay) ep.pay_amount = pay;
+  var rf = v('e-refund'); if (String(e.refund_amount == null ? '' : e.refund_amount) !== rf) ep.refund_amount = rf;
+  var memo = v('e-memo'); if (memo !== (e.memo || '')) ep.memo = memo;
+
+  if (!Object.keys(pp).length && !Object.keys(ep).length) { S.edit = false; toast('바뀐 내용이 없어요'); render(); return; }
+  S.busy = true;
+  var chain = Promise.resolve();
+  if (Object.keys(pp).length) chain = chain.then(function () { return api('updatePerson', p.person_id, pp, p.updated_at); }).then(function (row) { replacePerson(row); });
+  if (Object.keys(ep).length) chain = chain.then(function () { return api('updateEnrollment', e.enroll_id, ep, e.updated_at); }).then(function (row) { replaceEnr(row); });
+  chain.then(function () { S.busy = false; S.edit = false; toast('저장했어요'); render(); })
+    .catch(function (err) { S.busy = false; fail(err); if (err.code !== 'CONFLICT' && err.code !== 'NOT_FOUND') render2(); });
+}
+/** 오류 뒤에 수정 모드를 유지한 채 저장 버튼만 다시 켠다 (입력한 내용은 그대로) */
+function render2() { var b = document.querySelector('[data-act="edit-save"]'); if (b) b.disabled = false; }
+
+/* ===================== 단계 체크·이동수단·일괄 처리 ===================== */
+function toggleStep(eid, step) {
+  var e = enrOf(eid); if (!e || S.pending[eid]) return;
+  var on = !stepDone(e, step), prev = JSON.parse(JSON.stringify(e));
+  e[STEP_COLS[step]] = on ? S.boot.today : '';
+  S.pending[eid] = true; render();
+  api('setStep', eid, step, on, prev.updated_at).then(function (row) { delete S.pending[eid]; replaceEnr(row); render(); })
+    .catch(function (err) { delete S.pending[eid]; replaceEnr(prev); render(); fail(err); });
+}
+function cycleAttend(eid) {
+  var e = enrOf(eid); if (!e || S.pending[eid]) return;
+  var next = nextAttend(e.attend), prev = JSON.parse(JSON.stringify(e));
+  e.attend = next; S.pending[eid] = true; render();
+  api('setStep', eid, 'attend', next, prev.updated_at).then(function (row) { delete S.pending[eid]; replaceEnr(row); render(); })
+    .catch(function (err) { delete S.pending[eid]; replaceEnr(prev); render(); fail(err); });
+}
+function changeTransport(eid, value) {
+  var e = enrOf(eid); if (!e || S.pending[eid]) return;
+  var prev = JSON.parse(JSON.stringify(e)), p = X.person[e.person_id] || {};
+  e.transport = value; S.pending[eid] = true; render();
+  api('updateEnrollment', eid, { transport: value }, prev.updated_at).then(function (row) {
+    delete S.pending[eid]; replaceEnr(row); render();
+    toast((p.name || '') + '님 이동수단을 ' + (prev.transport || '미정') + ' → ' + (value || '미정') + '(으)로 바꿨어요');
+  }).catch(function (err) { delete S.pending[eid]; replaceEnr(prev); render(); fail(err); });
+}
+function bulkAttend(value) {
+  var s = X.session[S.sid]; if (!s) return;
+  var n = activeOf(S.boot.enrollments, s.session_id).length;
+  openModal({
+    title: value ? '참석 전원 처리' : '참석 전원 해제',
+    html: '<p>' + esc(progName(s.program_id)) + ' ' + esc(s.n) + '회차의 <b>취소가 아닌 ' + n + '명</b>' + (value ? '을 모두 "참석"으로' : '의 참석 입력을 모두 비우고 "미정"으로') + ' 바꿀까요?</p><p class="muted">취소된 사람은 바뀌지 않아요. 바꾼 뒤에 개인별로 불참을 고칠 수 있어요.</p>',
+    yes: value ? '전원 참석 처리' : '전원 해제', danger: !value
+  }, function () {
+    api('bulkSetStep', s.session_id, 'attend', value ? '참석' : '').then(function (rows) {
+      rows.forEach(replaceEnr); render(); toast(rows.length ? rows.length + '명을 바꿨어요' : '바뀐 사람이 없어요');
+    }).catch(fail);
+  });
+}
+
+/* ===================== 회차 관리 ===================== */
+function sessionsHtml() {
+  var b = S.boot, t = b.today;
+  var list = sortSessions(b.sessions, t);
+  var rows = list.map(function (s) {
+    var st = sessionState(s, t), n = b.enrollments.filter(function (e) { return e.session_id === s.session_id; }).length;
+    return '<tr><td class="nw"><b>' + esc(s.n) + '회차</b><br>' + pchip(s.program_id) + '</td><td class="nw">' + esc(fmtRange(s.start, s.end)) + '</td><td>' + stateChip(st) + '</td>' +
+      '<td class="nw">' + esc(money(s.fee) || '–') + '</td><td>' + esc(s.cap || '–') + '</td><td>' + n + '명</td><td class="muted">' + esc(s.note) + '</td>' +
+      '<td class="nw" style="text-align:right"><button class="btn sm" data-act="sess" data-sid="' + esc(s.session_id) + '">상세</button> <button class="btn sm" data-act="sf-edit" data-sid="' + esc(s.session_id) + '">' + IC.pencil + ' 수정</button> ' +
+      (n === 0 ? '<button class="btn sm ghost" data-act="sf-del" data-sid="' + esc(s.session_id) + '">삭제</button>' : '') + '</td></tr>';
+  }).join('');
+  return '<div class="top"><div><h1>회차 관리</h1><div class="sub">회차를 추가하고 날짜·참가비·정원을 고칩니다. 참여 기록이 없는 회차만 삭제할 수 있어요.</div></div><div class="sp"></div>' +
+    '<button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button></div>' +
+    (list.length ? '<div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>회차</th><th>일정</th><th>상태</th><th>참가비</th><th>정원</th><th>기록</th><th>메모</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>'
+      : '<div class="card"><div class="empty"><b>아직 회차가 없어요</b>위의 "회차 추가"로 첫 회차를 만들어 보세요.</div></div>');
+}
+
+function sessionFormHtml() {
+  var f = S.sf, isNew = f.mode === 'new', s = isNew ? null : X.session[f.sid];
+  var b = S.boot;
+  var defProg = f.prog || (S.prog !== 'all' ? S.prog : 'w');
+  var last = sortSessions(b.sessions.filter(function (x) { return x.program_id === (isNew ? defProg : s.program_id); }), b.today)[0];
+  var v = isNew ? { program_id: defProg, n: nextSessionNumber(b.sessions, defProg), start: '', end: '', fee: last ? last.fee : 50000, cap: last ? last.cap : 7, note: '' } : s;
+  var inp = function (id, val, type, extra) { return '<input type="' + (type || 'text') + '" id="' + id + '" value="' + esc(val) + '" ' + (extra || '') + '>'; };
+  return '<div id="drawer" class="open"><div class="dim"></div><div class="panel">' +
+    '<div class="row" style="justify-content:space-between"><h3>' + (isNew ? '회차 추가' : esc(progName(s.program_id)) + ' ' + esc(s.n) + '회차 수정') + '</h3><button class="btn sm ghost" data-act="sf-close">' + IC.x + '</button></div>' +
+    '<div class="field-grid" style="margin-top:16px">' +
+    (isNew ? '<div><label class="f">프로그램</label><select id="sf-prog">' + b.programs.map(function (p) { return '<option value="' + esc(p.program_id) + '"' + (p.program_id === v.program_id ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></div>' +
+      '<div><label class="f">회차 번호</label>' + inp('sf-n', v.n, 'number', 'min="1"') + '</div>' : '<div class="full muted">프로그램과 회차 번호는 바꿀 수 없어요.</div>') +
+    '<div><label class="f">시작일</label>' + inp('sf-start', v.start, 'date') + '</div><div><label class="f">종료일</label>' + inp('sf-end', v.end, 'date') + '</div>' +
+    '<div><label class="f">참가비 (원)</label>' + inp('sf-fee', v.fee, 'number', 'min="0" step="1000"') + '</div><div><label class="f">정원 (명)</label>' + inp('sf-cap', v.cap, 'number', 'min="1"') + '</div>' +
+    '<div class="full"><label class="f">메모</label>' + inp('sf-note', v.note) + '</div></div>' +
+    '<div class="err" id="sf-err">' + esc(f.err || '') + '</div>' +
+    '<div class="row" style="margin-top:18px"><button class="btn pri" data-act="sf-save"' + (S.busy ? ' disabled' : '') + '>저장</button><button class="btn" data-act="sf-close">취소</button></div></div></div>';
+}
+
+function saveSessionForm() {
+  if (S.busy) return;
+  var f = S.sf, isNew = f.mode === 'new';
+  var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+  var input = { start: v('sf-start'), end: v('sf-end'), fee: v('sf-fee'), cap: v('sf-cap'), note: v('sf-note') };
+  if (isNew) { input.program_id = v('sf-prog'); input.n = v('sf-n'); } else input.session_id = f.sid;
+  S.busy = true;
+  api('saveSession', input).then(function (row) {
+    S.busy = false; replaceSession(row); S.sf = null; S.sid = row.session_id;
+    toast(isNew ? '회차를 추가했어요' : '회차를 수정했어요'); render();
+  }).catch(function (err) {
+    S.busy = false; f.err = err.msg;
+    var el = document.getElementById('sf-err'); if (el) el.textContent = err.msg;
+    var bt = document.querySelector('[data-act="sf-save"]'); if (bt) bt.disabled = false;
+  });
+}
+function deleteSessionConfirm(sid) {
+  var s = X.session[sid]; if (!s) return;
+  openModal({ title: '회차 삭제', html: '<p><b>' + esc(progName(s.program_id)) + ' ' + esc(s.n) + '회차</b>를 삭제할까요? 참여 기록이 없는 회차만 삭제돼요.</p>', yes: '삭제', danger: true }, function () {
+    api('deleteSession', sid).then(function () {
+      S.boot.sessions = S.boot.sessions.filter(function (x) { return x.session_id !== sid; }); reindex();
+      if (S.sid === sid) S.sid = defaultSid(); render(); toast('삭제했어요');
+    }).catch(fail);
+  });
+}
+
+/* ===================== 기존 엑셀 이관 (소유자 전용, 1회용) ===================== */
+function newImp() { return { file: '', rows: null, rrnCols: 0, rowCount: 0, error: '', opts: { program_id: 'w', year: 2026, fee: 50000, cap: 7 }, preview: null, result: null, ok: false, busy: false }; }
+
+function importHtml() {
+  if (!isOwner()) return '<div class="card"><div class="empty"><b>소유자만 볼 수 있는 화면이에요</b></div></div>';
+  if (!S.imp) S.imp = newImp();
+  var im = S.imp, b = S.boot;
+  var head = '<div class="top"><div><h1>기존 엑셀 이관</h1><div class="sub">현재 쓰는 참여자 명단 엑셀을 대시보드로 한 번만 옮깁니다. 주민번호는 옮기지 않아요.</div></div></div>';
+
+  if (im.result) {
+    var r = im.result;
+    return head + '<div class="ban">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>이관을 마쳤어요.</b><br>회차 ' + r.counts.sessions + '개 · 사람 ' + r.counts.people + '명 · 참여 기록 ' + r.counts.enrollments + '건을 저장했고, 이관 직전의 운영 DB를 백업 폴더에 복사해 두었어요 (' + esc(r.backup.name) + ').</div></div>' +
+      '<div class="card card-b"><b>다음에 하실 일</b><ol class="step-list"><li>회차 상세에서 인원과 단계가 엑셀과 맞는지 확인하세요.</li><li>이관 때 이름 칸에 괄호가 있던 사람은 참여자 상세의 "남긴 말"을 확인해 이름을 바로잡아 주세요.</li><li>종료된 회차는 회차 상세의 "참석 전원 처리"로 참석을 정리하고, 불참자만 고치세요.</li><li>이동수단이 "미정"인 사람은 알면 채워 주세요.</li><li>맞게 옮겨졌으면 원본 엑셀의 주민번호 열을 지우거나 파일을 안전하게 보관하세요.</li></ol>' +
+      '<div class="row" style="margin-top:12px"><button class="btn pri" data-act="nav" data-to="dash">홈 대시보드로</button></div></div>';
+  }
+  if (b.config.legacy_imported) {
+    return head + '<div class="card card-b"><div class="row"><span class="chip ok dot">이관 완료</span><span class="muted">이미 이관했어요. 중복 이관은 막혀 있습니다.</span></div>' +
+      '<p class="muted" style="margin:12px 0 0">이관 결과가 잘못됐다면 이관한 회차·사람·참여 기록만 지우고 처음 상태로 되돌릴 수 있어요. 이관 뒤에 그 회차에 새 참여 기록을 추가했다면 되돌릴 수 없어요.</p>' +
+      '<div class="row" style="margin-top:14px"><button class="btn bad" data-act="imp-undo">이관 되돌리기…</button></div></div>';
+  }
+
+  var pv = im.preview, step1 = im.rows != null;
+  var o = im.opts;
+  var fileCard = '<div class="card card-b"><b>1. 엑셀 파일 선택</b><p class="muted" style="margin:6px 0 12px">현재 명단 엑셀(.xlsx)을 고르세요. 파일은 이 컴퓨터의 브라우저가 읽고, <b>주민번호 열은 지운 뒤</b> 나머지만 서버로 보내요.</p>' +
+    '<div class="row"><input type="file" id="imp-file" accept=".xlsx,.xls"></div>' +
+    (im.error ? '<div class="err" style="margin-top:8px">' + esc(im.error) + '</div>' : '') +
+    (step1 ? '<div class="ban" style="margin:12px 0 0">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>' + esc(im.file) + '</b>을 읽었어요 (' + im.rowCount + '행).<br>주민번호 열 <b>' + im.rrnCols + '개</b>를 지운 뒤라서 주민번호는 전송되지 않아요.</div></div>' : '') + '</div>';
+
+  var optCard = '<div class="card card-b" style="' + (step1 ? '' : 'opacity:.5;pointer-events:none') + '"><b>2. 회차 정보</b><p class="muted" style="margin:6px 0 12px">엑셀에 없는 정보예요. 모든 회차에 같은 값이 들어갑니다.</p>' +
+    '<div class="field-grid"><div><label class="f">프로그램</label><select id="imp-prog">' + b.programs.map(function (p) { return '<option value="' + esc(p.program_id) + '"' + (p.program_id === o.program_id ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></div>' +
+    '<div><label class="f">연도</label><input type="number" id="imp-year" value="' + esc(o.year) + '"></div>' +
+    '<div><label class="f">참가비 (원)</label><input type="number" id="imp-fee" value="' + esc(o.fee) + '"></div><div><label class="f">정원 (명)</label><input type="number" id="imp-cap" value="' + esc(o.cap) + '"></div></div>' +
+    '<div class="row" style="margin-top:14px"><button class="btn pri" data-act="imp-preview"' + (im.busy ? ' disabled' : '') + '>미리보기</button><span class="muted" style="font-size:12.5px">미리보기는 저장하지 않아요.</span></div></div>';
+
+  var pvCard = '';
+  if (pv) {
+    var sessLabel = {};
+    (pv.sessions || []).forEach(function (x) { sessLabel[x.session_id] = progName(x.program_id) + ' ' + x.n + '회차 · ' + fmtRange(x.start, x.end); });
+    var sumRows = pv.summary.map(function (s) {
+      return '<tr><td class="nw"><b>' + esc(sessLabel[s.session_id] || s.session_id) + '</b></td><td>' + s.total + '</td><td>' + (s.cancelled ? '<span class="bad-text">' + s.cancelled + '</span>' : 0) + '</td><td><b>' + s.active + '</b></td><td>' + s.paid + '</td><td>' + s.m2 + '</td><td>' + s.ins + '</td><td>' + s.attend + '</td><td>' + s.blankTransport + '</td></tr>';
+    }).join('');
+    pvCard = '<div class="card card-b"><b>3. 미리보기 결과</b>' +
+      (pv.errors.length ? '<div class="ban warn" style="margin:12px 0 0">' + IC.warn + '<div class="sp"><b>이관할 수 없어요.</b><ul style="margin:6px 0 0;padding-left:18px">' + pv.errors.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul></div></div>' : '') +
+      '<div class="muted" style="margin:10px 0">회차 ' + pv.counts.sessions + '개 · 사람 ' + pv.counts.people + '명 · 참여 기록 ' + pv.counts.enrollments + '건이 만들어져요. "참여"는 취소를 뺀 인원입니다.</div>' +
+      '<div class="scroll"><table class="tbl"><thead><tr><th>회차</th><th>전체</th><th>취소</th><th>참여</th><th>입금</th><th>최종 안내</th><th>보험</th><th>참석</th><th>이동수단 미정</th></tr></thead><tbody>' + sumRows + '</tbody></table></div>' +
+      '<div class="note" style="margin-top:12px">취소: 입금이 없는 사람과 전액 환불한 사람 · 보험: 취소가 아닌 사람은 가입 완료로 기록 · 참석: 25,000원 부분 환불자만 "참석" · 동의 항목은 "미확인"</div>' +
+      (pv.warnings.length ? '<div style="margin-top:12px"><b style="font-size:13px">확인할 점 ' + pv.warnings.length + '개</b><ul style="margin:6px 0 0;padding-left:18px;color:var(--ink2)">' + pv.warnings.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul></div>' : '') +
+      (pv.ok ? '<div style="margin-top:16px"><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="imp-ok" ' + (im.ok ? 'checked' : '') + ' style="margin-top:3px"> <span>미리보기 내용이 맞아요. 실행 직전에 운영 DB가 자동으로 백업돼요.</span></label>' +
+        '<div class="row" style="margin-top:12px"><button class="btn pri" data-act="imp-commit"' + (!im.ok || im.busy ? ' disabled' : '') + '>이관 실행</button></div></div>' : '') + '</div>';
+  }
+  return head + '<div class="stack">' + fileCard + optCard + pvCard + '</div>';
+}
+
+function readImportOpts() {
+  var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+  S.imp.opts = { program_id: v('imp-prog') || 'w', year: v('imp-year'), fee: v('imp-fee'), cap: v('imp-cap') };
+}
+function onImportFile(file) {
+  S.imp = newImp();
+  if (!file) { render(); return; }
+  S.imp.file = file.name;
+  if (typeof XLSX === 'undefined') { S.imp.error = '엑셀 읽기 도구를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.'; render(); return; }
+  var rd = new FileReader();
+  rd.onload = function () {
+    try {
+      var wb = XLSX.read(rd.result, { type: 'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+      var blanked = blankRrnColumns(raw);                 // 주민번호 열을 통째로 비운다 (이 뒤로 원본 raw는 쓰지 않는다)
+      if (rowsHaveRrn(blanked.rows)) {
+        S.imp.error = '주민번호처럼 보이는 값이 다른 칸에도 있어서 이관을 중단했어요. 아무것도 전송하지 않았어요. 엑셀의 주민번호 열 이름이 "주민번호"인지 확인해 주세요.';
+      } else {
+        S.imp.rows = trimRows(blanked.rows); S.imp.rowCount = S.imp.rows.length; S.imp.rrnCols = blanked.count;
+        if (!blanked.count) S.imp.error = '주민번호 열을 찾지 못했어요. 값이 모두 비어 있어서 괜찮다면 그대로 진행할 수 있어요.';
+      }
+    } catch (e) { S.imp.error = '엑셀을 읽지 못했어요: ' + e.message; }
+    render();
+  };
+  rd.onerror = function () { S.imp.error = '파일을 읽지 못했어요.'; render(); };
+  rd.readAsArrayBuffer(file);
+}
+function previewImport() {
+  readImportOpts(); S.imp.busy = true; S.imp.preview = null; S.imp.ok = false; render();
+  api('previewLegacyImport', { rows: S.imp.rows, opts: S.imp.opts }).then(function (pv) { S.imp.busy = false; S.imp.preview = pv; render(); })
+    .catch(function (err) { S.imp.busy = false; S.imp.error = err.msg; render(); });
+}
+function commitImport() {
+  S.imp.busy = true; render();
+  api('commitLegacyImport', { rows: S.imp.rows, opts: S.imp.opts }).then(function (res) {
+    S.imp.busy = false; S.imp.result = res; return loadBoot();
+  }).catch(function (err) { S.imp.busy = false; S.imp.error = err.msg; render(); toast(err.msg); });
+}
+function undoImportConfirm() {
+  openModal({
+    title: '이관 되돌리기',
+    html: '<p>이관으로 만든 <b>회차·사람·참여 기록을 모두 지워</b> 이관 전 상태로 되돌려요. 이관 뒤에 고친 내용(체크, 이동수단 등)도 함께 사라져요.</p><p>계속하려면 아래에 <b>되돌리기</b>라고 입력하세요.</p>',
+    yes: '되돌리기', danger: true, need: '되돌리기'
+  }, function () {
+    api('undoLegacyImport').then(function (r) {
+      S.imp = newImp(); toast('되돌렸어요 (회차 ' + r.sessions + ' · 사람 ' + r.people + ' · 참여 ' + r.enrollments + ')'); return loadBoot();
+    }).catch(fail);
+  });
+}
+
+/* ===================== 확인 창 ===================== */
+function openModal(m, onYes) { S.modal = m; MODAL_FN = onYes; render(); }
+function closeModal() { S.modal = null; MODAL_FN = null; render(); }
+function modalHtml() {
+  var m = S.modal;
+  return '<div class="modal-wrap"><div class="dim" data-act="modal-no"></div><div class="modal"><h3>' + esc(m.title) + '</h3>' + m.html +
+    (m.need ? '<input type="text" id="modal-text" placeholder="' + esc(m.need) + '" style="width:100%;margin-top:8px">' : '') +
+    '<div class="row"><button class="btn" data-act="modal-no">취소</button><button class="btn ' + (m.danger ? 'bad' : 'pri') + '" data-act="modal-yes" id="modal-yes"' + (m.need ? ' disabled' : '') + '>' + esc(m.yes || '확인') + '</button></div></div></div>';
+}
+
+/* ===================== 이벤트 ===================== */
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!t) return;
+  var a = t.getAttribute('data-act'), d = t.dataset;
+  if (a === 'none' || t.disabled) return;
+  switch (a) {
+    case 'nav': S.screen = d.to; S.drawer = null; S.edit = false; if (d.to === 'imp' && !S.imp) S.imp = newImp(); window.scrollTo(0, 0); render(); break;
+    case 'prog': S.prog = d.id; render(); break;
+    case 'sess': S.sid = d.sid; S.screen = 'sess'; window.scrollTo(0, 0); render(); break;
+    case 'who': if (d.eid) openWho(d.eid); break;
+    case 'close-drawer': S.drawer = null; S.edit = false; render(); break;
+    case 'edit': S.edit = true; render(); break;
+    case 'edit-cancel': S.edit = false; render(); break;
+    case 'edit-save': saveEdit(); break;
+    case 'step': toggleStep(d.eid, d.step); break;
+    case 'attend': cycleAttend(d.eid); break;
+    case 'bulk': bulkAttend(d.v === 'true'); break;
+    case 'sf-new': S.sf = { mode: 'new', prog: S.prog !== 'all' ? S.prog : '' }; render(); break;
+    case 'sf-edit': S.sf = { mode: 'edit', sid: d.sid }; render(); break;
+    case 'sf-close': S.sf = null; render(); break;
+    case 'sf-save': saveSessionForm(); break;
+    case 'sf-del': deleteSessionConfirm(d.sid); break;
+    case 'imp-preview': previewImport(); break;
+    case 'imp-commit': commitImport(); break;
+    case 'imp-undo': undoImportConfirm(); break;
+    case 'modal-no': closeModal(); break;
+    case 'modal-yes': { var fn = MODAL_FN; S.modal = null; MODAL_FN = null; render(); if (fn) fn(); break; }
+    case 'reload': loadBoot(); break;
+  }
+});
+document.addEventListener('change', function (ev) {
+  var el = ev.target;
+  if (el.getAttribute && el.getAttribute('data-act') === 'transport') { changeTransport(el.getAttribute('data-eid'), el.value); return; }
+  if (el.id === 'imp-file') { onImportFile(el.files && el.files[0]); return; }
+  if (el.id === 'imp-ok') { S.imp.ok = el.checked; var b = document.querySelector('[data-act="imp-commit"]'); if (b) b.disabled = !el.checked; return; }
+  if (el.id === 'sf-prog') {   // 프로그램을 바꾸면 회차 번호·참가비·정원 기본값을 그 프로그램에 맞춘다
+    var pid = el.value, b2 = S.boot;
+    var last = sortSessions(b2.sessions.filter(function (x) { return x.program_id === pid; }), b2.today)[0];
+    document.getElementById('sf-n').value = nextSessionNumber(b2.sessions, pid);
+    document.getElementById('sf-fee').value = last ? last.fee : 50000;
+    document.getElementById('sf-cap').value = last ? last.cap : 7;
+  }
+});
+document.addEventListener('input', function (ev) {
+  var el = ev.target;
+  if (el.id === 'q') { S.q = el.value; var pos = el.selectionStart; render(); var q = document.getElementById('q'); if (q) { q.focus(); q.setSelectionRange(pos, pos); } return; }
+  if (el.id === 'modal-text' && S.modal && S.modal.need) { var y = document.getElementById('modal-yes'); if (y) y.disabled = el.value.trim() !== S.modal.need; }
+});
+document.addEventListener('keydown', function (ev) {
+  if (ev.key !== 'Escape') return;
+  if (S.modal) closeModal(); else if (S.sf) { S.sf = null; render(); } else if (S.drawer && !S.edit) { S.drawer = null; render(); }
+});
+
+/* ===================== 시작 ===================== */
+(function init() {
+  document.body.insertAdjacentHTML('beforeend', '<div id="toast"></div>');
+  var P = window.__PREVIEW;            // 로컬 미리보기(tools/build-preview.js)에서만 있는 값. 실제 앱에는 없다.
+  if (P && P.screen) S.screen = P.screen;
+  loadBoot().then(function () {
+    if (!P) return;
+    if (P.sid) S.sid = P.sid;
+    if (P.drawerIdx != null && S.boot.enrollments[P.drawerIdx]) { S.drawer = { eid: S.boot.enrollments[P.drawerIdx].enroll_id }; S.edit = !!P.edit; }
+    if (P.sf) S.sf = P.sf;
+    if (P.imp) S.imp = P.imp;
+    if (P.modal) { S.modal = P.modal; }
+    render();
+  });
+})();
+</script>
