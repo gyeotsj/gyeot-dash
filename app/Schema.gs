@@ -111,3 +111,57 @@ const SEED_TEMPLATES = [
   { tpl_id: 't4', name: '만족도 요청 기본', stage: 'sat', program_id: 'all', channel: 'sms',
     body: '[곁마을] {이름}님, {프로그램} {회차}는 어떠셨나요? 짧은 만족도 조사에 참여해 주세요. {폼링크}' }
 ];
+
+/* ---------- 쓰기 규칙 (서버가 화면에서 온 모든 입력을 이 규칙으로 다시 검사한다) ---------- */
+
+const TRANSPORT_VALUES = ['', '자차', '고속터미널', '시외터미널'];
+
+/** 단계 체크: date는 완료일(오늘) 기록/비움, attend는 '참석' / '불참' / 빈칸 */
+const STEP_DEFS = {
+  m1: { col: 'm1_at', kind: 'date' },
+  pay: { col: 'pay_at', kind: 'date' },
+  ins: { col: 'ins_at', kind: 'date' },
+  m2: { col: 'm2_at', kind: 'date' },
+  attend: { col: 'attend', kind: 'attend' }
+};
+
+/** updateEnrollment가 바꿀 수 있는 열. 여기에 없는 열은 화면에서 보내도 거부한다. */
+const ENROLLMENT_EDITABLE = {
+  transport: { type: 'enum', values: TRANSPORT_VALUES },
+  memo: { type: 'text', max: 1000 },
+  cancel_reason: { type: 'text', max: 200 },
+  pay_amount: { type: 'int', min: 0, max: 10000000, empty: true },
+  refund_amount: { type: 'int', min: 0, max: 10000000, empty: true }
+};
+
+/** updatePerson이 바꿀 수 있는 열 */
+const PERSON_EDITABLE = {
+  name: { type: 'text', max: 40, required: true },
+  phone: { type: 'phone', required: true },
+  email: { type: 'email', empty: true },
+  job: { type: 'text', max: 60 },
+  area: { type: 'text', max: 60 },
+  consent_retain: { type: 'enum', values: ['', 'Y', 'N'] },
+  consent_portrait: { type: 'enum', values: ['', 'Y', 'N'] }
+};
+
+/** 검증 오류 문구에 붙이는 항목 이름 */
+const FIELD_LABELS = {
+  name: '이름', phone: '연락처', email: '이메일', job: '직업', area: '거주지',
+  consent_retain: '추가 보유 동의', consent_portrait: '초상권 동의',
+  transport: '이동수단', memo: '남긴 말', cancel_reason: '취소 사유',
+  pay_amount: '입금액', refund_amount: '환불액',
+  program_id: '프로그램', n: '회차 번호', start: '시작일', end: '종료일', fee: '참가비', cap: '정원', note: '메모',
+  _: '요청'
+};
+
+/** 회차 입력 규칙 (추가 때 program_id, n 필수. 수정 때는 날짜·참가비·정원·메모만 바꿀 수 있음) */
+const SESSION_RULES = {
+  program_id: { type: 'enum', values: PROGRAM_IDS },
+  n: { type: 'int', min: 1, max: 99 },
+  start: { type: 'date' },
+  end: { type: 'date' },
+  fee: { type: 'int', min: 0, max: 10000000 },
+  cap: { type: 'int', min: 1, max: 99 },
+  note: { type: 'text', max: 200 }
+};
