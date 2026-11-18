@@ -1,0 +1,14 @@
+# 개인정보가 들어 있는 파일은 저장소에 넣지 않는다
+*.xlsx
+*.xls
+*.csv
+
+# 개발 도구 산출물
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# 임시 파일
+~$*
+*.tmp

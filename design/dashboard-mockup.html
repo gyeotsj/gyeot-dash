@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>곁마을 운영 대시보드 시안</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+:root{
+  --bg:#f4f6f4; --surface:#ffffff; --surface2:#f8faf8; --line:#e3e8e5; --line2:#d2dad6;
+  --ink:#18211e; --ink2:#46524e; --muted:#7a8782;
+  --pri:#0e766b; --pri-ink:#ffffff; --pri-weak:#e1f1ee; --pri-line:#a9d6cf;
+  --warn:#9a5b00; --warn-bg:#fff3d9; --warn-line:#f0d08a;
+  --bad:#b4390c; --bad-bg:#fde9df; --bad-line:#f2b79d;
+  --ok:#17803d; --ok-bg:#e3f4e8;
+  --c-w:#0e766b; --c-l:#b45309; --c-g:#6d4bd0;
+  --shadow:0 1px 2px rgba(20,35,30,.05),0 4px 14px rgba(20,35,30,.05);
+  --r:12px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#101614; --surface:#18211e; --surface2:#1c2723; --line:#28342f; --line2:#34423c;
+    --ink:#e8efec; --ink2:#b4c1bb; --muted:#80908a;
+    --pri:#3fb9a9; --pri-ink:#06211d; --pri-weak:#17332e; --pri-line:#245a51;
+    --warn:#f3be5a; --warn-bg:#2e2410; --warn-line:#5b4617;
+    --bad:#ff9a73; --bad-bg:#33190f; --bad-line:#6a3420;
+    --ok:#62d58a; --ok-bg:#12301d;
+    --c-w:#3fb9a9; --c-l:#f0a14f; --c-g:#a48cf2;
+    --shadow:0 1px 2px rgba(0,0,0,.3);
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 "Pretendard Variable","Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer}
+.app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+/* sidebar */
+.side{background:var(--surface);border-right:1px solid var(--line);padding:20px 14px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:6px}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
+.logo{width:34px;height:34px;border-radius:10px;background:var(--pri);color:var(--pri-ink);display:grid;place-items:center;font-weight:800;font-size:17px}
+.brand b{display:block;font-size:15px;letter-spacing:-.2px}
+.brand span{font-size:12px;color:var(--muted)}
+.nav-label{font-size:11px;color:var(--muted);padding:12px 10px 4px;letter-spacing:.4px}
+.nav{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;text-align:left;padding:9px 10px;border-radius:9px;color:var(--ink2);font-weight:500}
+.nav svg{width:18px;height:18px;flex:none}
+.nav:hover{background:var(--surface2)}
+.nav.on{background:var(--pri-weak);color:var(--pri);font-weight:700}
+.nav .bd{margin-left:auto;background:var(--bad);color:#fff;border-radius:99px;font-size:11px;padding:0 7px;line-height:18px;font-weight:700}
+.side-foot{margin-top:auto;font-size:12px;color:var(--muted);padding:10px;border:1px dashed var(--line2);border-radius:10px;line-height:1.5}
+.side-foot b{color:var(--ink2)}
+/* main */
+main{padding:26px 32px 60px;min-width:0;max-width:1320px}
+.top{display:flex;align-items:flex-end;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.top h1{font-size:23px;margin:0;letter-spacing:-.5px}
+.top .sub{color:var(--muted);margin-top:2px}
+.top .sp{flex:1}
+.crumb{font-size:13px;color:var(--muted);margin-bottom:6px;display:flex;gap:6px;align-items:center}
+.crumb a{color:var(--muted);cursor:pointer;text-decoration:none}
+.crumb a:hover{color:var(--pri)}
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);background:var(--surface);padding:8px 13px;border-radius:9px;font-weight:600;color:var(--ink)}
+.btn svg{width:16px;height:16px}
+.btn:hover{border-color:var(--pri);color:var(--pri)}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:var(--pri-ink)}
+.btn.pri:hover{filter:brightness(1.08);color:var(--pri-ink)}
+.btn.sm{padding:5px 10px;font-size:13px;border-radius:8px}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink2)}
+.seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px}
+.seg button{border:0;background:none;padding:6px 13px;border-radius:7px;font-weight:600;color:var(--ink2)}
+.seg button.on{background:var(--pri);color:var(--pri-ink)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.card-h{display:flex;align-items:center;gap:10px;padding:15px 18px 0}
+.card-h h2{font-size:15px;margin:0;letter-spacing:-.2px}
+.card-h .sp{flex:1}
+.card-b{padding:14px 18px 18px}
+.grid{display:grid;gap:16px}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g-main{grid-template-columns:minmax(0,1fr) 340px;align-items:start}
+.kpi{padding:16px 18px}
+.kpi .l{color:var(--muted);font-size:12.5px;font-weight:600}
+.kpi .v{font-size:27px;font-weight:800;letter-spacing:-1px;margin-top:2px}
+.kpi .v small{font-size:14px;font-weight:600;color:var(--muted);margin-left:2px;letter-spacing:0}
+.kpi .d{font-size:12.5px;color:var(--ink2);margin-top:2px}
+.bar{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:9px}
+.bar i{display:block;height:100%;background:var(--pri);border-radius:99px}
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:700;background:var(--surface2);color:var(--ink2);border:1px solid var(--line);white-space:nowrap}
+.chip.pri{background:var(--pri-weak);color:var(--pri);border-color:var(--pri-line)}
+.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad-line)}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.chip.dot::before{content:"";width:7px;height:7px;border-radius:99px;background:currentColor}
+.pg{display:inline-flex;align-items:center;gap:6px;font-weight:700;white-space:nowrap}
+.nw{white-space:nowrap}
+.tsel{appearance:none;-webkit-appearance:none;font:inherit;font-size:12px;font-weight:700;padding:3px 24px 3px 10px;border-radius:99px;border:1px solid var(--line);background:var(--surface2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23808c87' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 9px center;color:var(--ink2);cursor:pointer}
+.tsel.warn{background-color:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.tsel:hover:not(:disabled){border-color:var(--pri)}
+.tsel:disabled{cursor:default}
+.kv input,.kv select,.kv textarea{width:100%}
+.kv textarea{min-height:76px}
+.edit-ban{background:var(--pri-weak);border:1px solid var(--pri-line);border-radius:10px;padding:9px 12px;font-size:13px;color:var(--ink2);margin-top:14px}
+.acts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end}
+.pg i{width:9px;height:9px;border-radius:3px;display:inline-block}
+/* table */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:12px;color:var(--muted);font-weight:700;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--surface2)}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tbody tr.click{cursor:pointer}
+.tbl tbody tr.click:hover td{background:var(--surface2)}
+.tbl .c{text-align:center}
+.tbl .cx td{opacity:.5}
+.scroll{overflow-x:auto}
+.mini{display:flex;align-items:center;gap:8px;min-width:96px}
+.mini .t{flex:1;height:6px;border-radius:99px;background:var(--line);overflow:hidden}
+.mini .t i{display:block;height:100%;border-radius:99px;background:var(--pri)}
+.mini.warn .t i{background:#e0a02d}
+.mini.bad .t i{background:#d9622b}
+.mini small{font-size:12px;color:var(--ink2);font-weight:700;min-width:30px;text-align:right}
+.name{display:flex;align-items:center;gap:10px}
+.av{width:30px;height:30px;border-radius:99px;background:var(--pri-weak);color:var(--pri);display:grid;place-items:center;font-weight:800;font-size:12.5px;flex:none}
+.name b{display:block;font-weight:700}
+.name small{color:var(--muted);font-size:12px}
+.muted{color:var(--muted)}
+/* step cell */
+.sb{width:26px;height:26px;border-radius:99px;border:1.6px solid var(--line2);background:var(--surface);display:inline-grid;place-items:center;padding:0;color:transparent;transition:.12s}
+.sb svg{width:14px;height:14px}
+.sb:hover{border-color:var(--pri)}
+.sb.on{background:var(--pri);border-color:var(--pri);color:var(--pri-ink)}
+.sb.late{border-color:#e0a02d;background:var(--warn-bg)}
+.sb.fix{cursor:default}
+.sb.fix:hover{border-color:var(--pri)}
+.sb.no{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+.dash{color:var(--line2)}
+/* todo */
+.todo{display:flex;gap:11px;padding:12px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.todo:last-child{border-bottom:0;padding-bottom:0}
+.todo:first-child{padding-top:0}
+.ti{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none}
+.ti svg{width:16px;height:16px}
+.ti.bad{background:var(--bad-bg);color:var(--bad)}
+.ti.warn{background:var(--warn-bg);color:var(--warn)}
+.ti.pri{background:var(--pri-weak);color:var(--pri)}
+.todo b{display:block;font-weight:700;font-size:13.5px;line-height:1.35}
+.todo small{color:var(--muted);font-size:12.5px}
+.todo .btn{margin-top:7px}
+/* banners */
+.ban{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:11px;border:1px solid var(--pri-line);background:var(--pri-weak);color:var(--ink);margin-bottom:16px}
+.ban svg{width:20px;height:20px;flex:none;color:var(--pri);margin-top:1px}
+.ban.warn{border-color:var(--warn-line);background:var(--warn-bg)}
+.ban.warn svg{color:var(--warn)}
+.ban b{font-weight:700}
+.ban .sp{flex:1}
+/* summary stats */
+.sum{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.sum .card{padding:14px 16px}
+.sum .l{font-size:12.5px;color:var(--muted);font-weight:600}
+.sum .v{font-size:22px;font-weight:800;letter-spacing:-.6px}
+.sum .v small{font-size:13px;color:var(--muted);font-weight:600}
+.pick{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+/* drawer */
+#drawer{position:fixed;inset:0;display:none;z-index:50}
+#drawer.open{display:block}
+.dim{position:absolute;inset:0;background:rgba(10,20,16,.42)}
+.panel{position:absolute;right:0;top:0;bottom:0;width:440px;max-width:100%;background:var(--surface);border-left:1px solid var(--line);padding:22px 24px;overflow:auto;box-shadow:-10px 0 30px rgba(0,0,0,.15)}
+.panel h3{margin:0;font-size:19px;letter-spacing:-.4px}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:9px 10px;margin:14px 0}
+.kv dt{color:var(--muted);font-size:12.5px;font-weight:600}
+.kv dd{margin:0;font-weight:500}
+.sec{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.4px;margin:20px 0 8px;display:flex;align-items:center;gap:8px}
+.sec::after{content:"";height:1px;background:var(--line);flex:1}
+.tl{list-style:none;margin:0;padding:0}
+.tl li{display:flex;gap:11px;padding:6px 0;align-items:center}
+.tl .dotx{width:18px;height:18px;border-radius:99px;border:1.6px solid var(--line2);display:grid;place-items:center;flex:none;color:transparent}
+.tl .dotx svg{width:11px;height:11px}
+.tl li.on .dotx{background:var(--pri);border-color:var(--pri);color:var(--pri-ink)}
+.tl li span.d{margin-left:auto;color:var(--muted);font-size:12.5px}
+.note{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--ink2);font-size:13px}
+/* forms */
+select,input[type=text],textarea{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line2);border-radius:9px;padding:8px 11px}
+select:focus,input:focus,textarea:focus{outline:2px solid var(--pri-line);border-color:var(--pri)}
+textarea{width:100%;resize:vertical;min-height:130px;line-height:1.6}
+label.f{display:block;font-size:12.5px;font-weight:700;color:var(--ink2);margin:0 0 5px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.stack{display:grid;gap:14px}
+.drop{border:1.6px dashed var(--pri-line);background:var(--pri-weak);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px}
+.drop .ic{width:42px;height:42px;border-radius:11px;background:var(--surface);display:grid;place-items:center;color:var(--pri)}
+.drop .ic svg{width:22px;height:22px}
+.steps{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.steps .s{display:flex;align-items:center;gap:8px;padding:7px 13px 7px 8px;border-radius:99px;border:1px solid var(--line);background:var(--surface);font-weight:600;color:var(--muted)}
+.steps .s i{width:22px;height:22px;border-radius:99px;display:grid;place-items:center;font-style:normal;font-size:12px;background:var(--line);color:var(--ink2)}
+.steps .s.on{color:var(--ink);border-color:var(--pri-line)}
+.steps .s.on i{background:var(--pri);color:var(--pri-ink)}
+.steps .s.done i{background:var(--ok);color:#fff}
+.phone{display:flex;gap:10px}
+.rcpt{max-height:330px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.rcpt div{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line)}
+.rcpt div:last-child{border-bottom:0}
+.two{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}
+.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+#toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);background:#18211e;color:#fff;padding:11px 18px;border-radius:11px;font-weight:600;opacity:0;pointer-events:none;transition:.2s;z-index:80;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+.tag-sample{font-size:12px;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:4px 11px;font-weight:600}
+@media (max-width:1100px){
+  .g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g-main,.two{grid-template-columns:1fr}
+  .sum{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .three{grid-template-columns:1fr}
+}
+@media (max-width:760px){
+  .app{grid-template-columns:1fr}
+  .side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;padding:10px;align-items:center}
+  .brand{padding:0 8px 0 0}.nav-label,.side-foot{display:none}
+  .nav{width:auto;padding:7px 10px}.nav span{display:none}.nav .bd{display:none}
+  main{padding:18px 16px 50px}
+  .panel{padding:18px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side"></aside>
+  <main id="main"></main>
+</div>
+<div id="drawer"></div>
+<div id="toast"></div>
+
+<script>
+/* ===== 샘플 데이터 (모두 가상) ===== */
+const TODAY = new Date(2026, 9, 9);
+const WD = ['일','월','화','수','목','금','토'];
+const PROG = {
+  w:{name:'일해보기', c:'var(--c-w)', fee:50000, form:'일해보기 만족도 조사'},
+  l:{name:'살아보기', c:'var(--c-l)', fee:120000, form:'살아보기 만족도 조사'},
+  g:{name:'자라보기', c:'var(--c-g)', fee:70000, form:'자라보기 만족도 조사'}
+};
+const RAW = {
+  w:[[10,6,10,8,5],[10,12,10,14,8],[10,19,10,21,9],[10,22,10,24,4],[10,26,10,28,8]],
+  l:[[9,21,9,25,6],[10,13,10,17,7],[10,27,10,31,6],[11,10,11,14,3],[11,24,11,28,2]],
+  g:[[9,28,9,30,8],[10,15,10,17,9],[11,3,11,5,7],[11,17,11,19,4],[12,1,12,3,1]]
+};
+const SUR = ['김','이','박','최','정','강','조','윤','장','임','한','오','서'];
+const GIV = ['하늘','서준','지우','도윤','서연','민재','예린','하준','수아','지호','소율','건우','나연','동현','유진','시우','채원','재민','다은','태양'];
+const NAMES = Array.from({length:260}, (_,k) => SUR[k%13] + GIV[(k*3)%20]);
+const JOBS = ['디자이너','개발자','마케터','대학생','프리랜서','기획자','연구원','교사','작가','영상 편집자'];
+const AREA = ['서울 마포구','서울 관악구','경기 성남시','인천 연수구','부산 해운대구','대구 수성구','대전 유성구','광주 북구','강원 춘천시','경기 수원시'];
+const TRANS = ['자차','속초 고속터미널','속초 시외터미널'];
+const TRANS_S = ['자차','고속터미널','시외터미널'];
+const STEPS = [['g','합격'],['m1','1차 안내'],['pay','입금'],['ins','보험'],['m2','최종 안내'],['att','참석'],['sat','만족도']];
+
+const fmtMD = d => `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`;
+const addDays = (d,n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+const diff = (a,b) => Math.round((a-b)/864e5);
+
+const SESS = [];
+let gi = 0, off = 0;
+['w','l','g'].forEach(p => RAW[p].forEach((r,n) => {
+  const start = new Date(2026,r[0]-1,r[1]), end = new Date(2026,r[2]-1,r[3]);
+  SESS.push({id:p+(n+1), p, n:n+1, start, end, cnt:r[4], gi:gi++, off, days:diff(start,TODAY), done:end<TODAY, cap:10});
+  off += r[4];
+}));
+const S = id => SESS.find(s => s.id===id);
+
+const OVR = {}; /* 운영진이 수정한 사람 정보 (이름·연락처 등, 모든 회차에 적용) */
+function person(k){
+  return Object.assign({k, name:NAMES[k%NAMES.length], gender:k%3===1?'남':'여', birth:1990+((k*7)%14), job:JOBS[k%JOBS.length],
+    area:AREA[(k*3)%AREA.length], phone:'010-1234-'+String(1000+k), email:'guest'+(k+1)+'@example.com', consent:k%4!==1,
+    portrait:k%9!==5}, OVR[k]||{});
+}
+const defMemo = k => k%3===0?'알레르기가 있어요(갑각류). 식사 때 참고 부탁드려요.':k%3===1?'기차로 가는데 도착 시간이 조금 늦을 수 있어요.':'특별히 없습니다. 기대하고 있어요!';
+function flagsFor(s,i){
+  const d = s.days, f = {g:1};
+  if(s.done){ Object.assign(f,{m1:1,pay:1,ins:1,m2:1,att:(i%7===6)?0:1,sat:(i%5<3)?1:0}); return f; }
+  if(d<=3){ f.m1=1; f.pay=i%8!==3?1:0; f.ins=i%4!==0?1:0; f.m2=(f.pay&&f.ins&&i%3!==1)?1:0; }
+  else if(d<=10){ f.m1=1; f.pay=i%3!==0?1:0; f.ins=(d<=7&&i%2===0)?1:0; f.m2=0; }
+  else if(d<=21){ f.m1=1; f.pay=i%2===0?1:0; f.ins=0; f.m2=0; }
+  else { f.m1=i%3!==2?1:0; f.pay=i%4===0?1:0; f.ins=0; f.m2=0; }
+  f.att=null; f.sat=0; return f;
+}
+const STORE = {};
+function recs(sid){
+  if(STORE[sid]) return STORE[sid];
+  const s = S(sid);
+  STORE[sid] = Array.from({length:s.cnt}, (_,i) => {
+    let k = (s.off+i)%NAMES.length;
+    if(i===0 && s.p==='g') k = S('w'+s.n).off%NAMES.length; /* 자라보기 첫 참여자는 일해보기 재참여자 (이력 예시) */
+    const cancel = !s.done && (s.gi*7+i)%11===0;
+    return {i, k, sid, f:flagsFor(s,i), cancel, reason: cancel?'개인 사정':'', trans:k%3, memo:defMemo(k)};
+  });
+  return STORE[sid];
+}
+const act = sid => recs(sid).filter(r => !r.cancel);
+
+/* ===== 아이콘 ===== */
+const ic = {
+  home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
+  cal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.5a3.5 3.5 0 010 7M18 14.5c2 .6 3.5 2.4 3.5 5.5"/></svg>',
+  up:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>',
+  send:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/></svg>',
+  chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.6 7.1L3 21l1.9-5.4A8 8 0 1121 12z"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg>',
+  dl:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 18v1a1 1 0 001 1h14a1 1 0 001-1v-1"/></svg>',
+  warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18.5v.01"/></svg>',
+  lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>',
+  car:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17h14M3 13l2-6h14l2 6v4H3z"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="16.5" cy="17" r="1.5"/></svg>',
+  clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  file:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>',
+  key:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
+  chev:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M9 6l6 6-6 6"/></svg>'
+};
+
+/* ===== 계산 ===== */
+function statusChip(s){
+  if(s.done) return `<span class="chip">종료 · D+${diff(TODAY,s.end)}</span>`;
+  if(s.days<=3) return `<span class="chip bad dot">D-${s.days}</span>`;
+  if(s.days<=10) return `<span class="chip warn dot">D-${s.days}</span>`;
+  return `<span class="chip pri dot">D-${s.days}</span>`;
+}
+const refundDeadline = s => addDays(s.start,-3);
+function ratio(sid,key){ const a=act(sid); return [a.filter(r=>r.f[key]).length, a.length]; }
+function mini(sid,key,s){
+  const [d,t]=ratio(sid,key); const p=t?Math.round(d/t*100):0;
+  let cls=''; if(!s.done && d<t){ if(s.days<=3) cls='bad'; else if(s.days<=10) cls='warn'; }
+  return `<div class="mini ${cls}"><div class="t"><i style="width:${p}%"></i></div><small>${d}/${t}</small></div>`;
+}
+const pchip = p => `<span class="pg"><i style="background:${PROG[p].c}"></i>${PROG[p].name}</span>`;
+
+/* ===== 상태 ===== */
+const st = {screen:'dash', prog:'all', sid:'w2', send:{sid:'w2', filter:'pay', channel:'sms', tpl:'pay'}, satProg:'w', q:'', upDone:false};
+const HIST = [
+  {t:'10/08 15:20', s:'w1', stage:'sat', n:5, ch:'문자', body:'[곁마을] {이름}님, {프로그램} {회차}는 어떠셨나요? 짧은 만족도 조사에 참여해 주세요. {폼링크}'},
+  {t:'10/07 11:02', s:'w2', stage:'m1', n:8, ch:'메일', body:'{이름}님, 곁마을 {프로그램} {회차}에 함께해 주셔서 감사합니다. 상세 시간표와 참가비 안내를 보내드립니다. 참가비는 {참가비}원이며, 입금 후 알려 주세요.'},
+  {t:'10/05 17:40', s:'w1', stage:'m2', n:5, ch:'문자', body:'[곁마을] {이름}님, {회차} {날짜}가 곧 시작돼요. 노트북과 충전기를 꼭 챙겨 주세요. 집결 시간과 장소는 메일을 확인해 주세요. 이동수단: {이동수단}'}
+];
+
+/* ===== 사이드바 ===== */
+function todos(){
+  const out=[];
+  SESS.filter(s=>!s.done).sort((a,b)=>a.days-b.days).forEach(s=>{
+    const A=act(s.id), nm=PROG[s.p].name+' '+s.n+'회차';
+    const noIns=A.filter(r=>!r.f.ins).length, noPay=A.filter(r=>!r.f.pay).length, noM1=A.filter(r=>!r.f.m1).length;
+    const rd=diff(refundDeadline(s),TODAY);
+    if(s.days<=7 && noIns) out.push({sev:'bad',ico:'shield',t:`${nm} 보험 미가입 ${noIns}명`,d:`참여 D-${s.days} · 보험사 명단 업로드가 필요해요`,btn:'회차 열기',go:['sess',s.id],ord:s.days});
+    if(s.days<=10 && noPay) out.push({sev:s.days<=3?'bad':'warn',ico:'clock',t:`${nm} 입금 미확인 ${noPay}명`,d:`참가비 ${PROG[s.p].fee.toLocaleString()}원 · 입금 확인 후 체크해 주세요`,btn:'입금 미완료자 문자',go:['send',s.id,'pay'],ord:s.days+.1});
+    if(rd>=0 && rd<=1) out.push({sev:'warn',ico:'warn',t:`${nm} 환불 가능 기한 ${rd===0?'오늘':'내일'}`,d:`${fmtMD(refundDeadline(s))}까지 취소 시 100% 환불, 이후 환불 불가`,btn:'회차 열기',go:['sess',s.id],ord:s.days+.2});
+    if(s.days<=21 && noM1) out.push({sev:'warn',ico:'send',t:`${nm} 1차 안내 미발송 ${noM1}명`,d:'시간표·참가비 안내 메일',btn:'안내 메일 준비',go:['send',s.id,'all','mail','m1'],ord:s.days+.3});
+  });
+  SESS.filter(s=>s.done && diff(TODAY,s.end)<=14).forEach(s=>{
+    const A=act(s.id).filter(r=>r.f.att); const miss=A.filter(r=>!r.f.sat).length;
+    if(miss) out.push({sev:'pri',ico:'chat',t:`${PROG[s.p].name} ${s.n}회차 만족도 미응답 ${miss}명`,d:`종료 D+${diff(TODAY,s.end)} · 리마인드 문자를 보내 보세요`,btn:'리마인드 문구 만들기',go:['send',s.id,'sat','sms','sat'],ord:50});
+  });
+  return out.sort((a,b)=>a.ord-b.ord);
+}
+function renderSide(){
+  const nav=[['dash','홈 대시보드','home'],['sess','회차 상세','cal'],['people','참여자','users'],['up','신청 엑셀 업로드','up'],['send','문자·메일 발송 준비','send'],['sat','만족도 조사','chat'],['priv','개인정보 관리','shield'],['staff','운영진 관리','key']];
+  const n=todos().filter(t=>t.sev==='bad').length;
+  document.getElementById('side').innerHTML = `
+  <div class="brand"><div class="logo">곁</div><div><b>곁마을 운영</b><span>내부 운영진 전용</span></div></div>
+  <div class="nav-label">메뉴</div>
+  ${nav.map(x=>`<button class="nav ${st.screen===x[0]?'on':''}" data-go="${x[0]}">${ic[x[2]]}<span>${x[1]}</span>${x[0]==='dash'&&n?`<em class="bd" style="font-style:normal">${n}</em>`:''}</button>`).join('')}
+  <div class="side-foot"><b>시안 샘플 데이터</b><br>기준일 2026.10.09(금)<br>이름·연락처는 모두 가상입니다. 체크 버튼은 눌러서 바뀌는 것을 볼 수 있어요.</div>`;
+}
+
+/* ===== 화면: 대시보드 ===== */
+function dash(){
+  const list = SESS.filter(s=> st.prog==='all' ? (!s.done||diff(TODAY,s.end)<=14) : s.p===st.prog).sort((a,b)=>a.start-b.start);
+  const up = SESS.filter(s=>!s.done && s.days<=14);
+  const upN = up.reduce((n,s)=>n+act(s.id).length,0);
+  const pa = SESS.filter(s=>!s.done && s.days<=21), pt=pa.reduce((n,s)=>n+act(s.id).length,0), pd=pa.reduce((n,s)=>n+ratio(s.id,'pay')[0],0);
+  const ia = SESS.filter(s=>!s.done && s.days<=14), it=ia.reduce((n,s)=>n+act(s.id).length,0), id=ia.reduce((n,s)=>n+ratio(s.id,'ins')[0],0);
+  const sa = SESS.filter(s=>s.done), sd=sa.reduce((n,s)=>n+act(s.id).filter(r=>r.f.att&&r.f.sat).length,0), stt=sa.reduce((n,s)=>n+act(s.id).filter(r=>r.f.att).length,0);
+  const pc=(a,b)=>b?Math.round(a/b*100):0;
+  const T=todos();
+  return `
+  <div class="top"><div><h1>홈 대시보드</h1><div class="sub">모집부터 만족도 조사까지, 지금 어디까지 진행됐는지 한눈에 봅니다.</div></div><div class="sp"></div>
+    <div class="seg" id="progseg">${[['all','전체'],['l','살아보기'],['w','일해보기'],['g','자라보기']].map(x=>`<button class="${st.prog===x[0]?'on':''}" data-prog="${x[0]}">${x[1]}</button>`).join('')}</div></div>
+  <div class="grid g4" style="margin-bottom:16px">
+    <div class="card kpi"><div class="l">2주 안에 참여하는 사람</div><div class="v">${upN}<small>명</small></div><div class="d">${up.length}개 회차 진행 예정</div></div>
+    <div class="card kpi"><div class="l">참가비 입금 완료율</div><div class="v">${pc(pd,pt)}<small>%</small></div><div class="d">3주 안 회차 ${pd}/${pt}명</div><div class="bar"><i style="width:${pc(pd,pt)}%"></i></div></div>
+    <div class="card kpi"><div class="l">여행자보험 가입률</div><div class="v">${pc(id,it)}<small>%</small></div><div class="d">2주 안 회차 ${id}/${it}명</div><div class="bar"><i style="width:${pc(id,it)}%;background:#e0a02d"></i></div></div>
+    <div class="card kpi"><div class="l">만족도 응답률</div><div class="v">${pc(sd,stt)}<small>%</small></div><div class="d">종료 회차 참석자 ${sd}/${stt}명</div><div class="bar"><i style="width:${pc(sd,stt)}%"></i></div></div>
+  </div>
+  <div class="grid g-main">
+    <div class="card"><div class="card-h"><h2>회차 현황</h2><span class="chip">${list.length}개</span><div class="sp"></div><span class="muted" style="font-size:12.5px">행을 누르면 회차 상세로 이동</span></div>
+      <div class="scroll"><table class="tbl" style="margin-top:12px">
+        <thead><tr><th>회차</th><th>일정</th><th>상태</th><th>확정 인원</th><th>입금</th><th>보험</th><th>최종 안내</th></tr></thead>
+        <tbody>${list.map(s=>{
+          const A=act(s.id);
+          const cells = s.done
+            ? `<td colspan="3"><span class="muted">참석 </span><b>${A.filter(r=>r.f.att).length}/${A.length}</b><span class="muted"> · 만족도 응답 </span><b>${A.filter(r=>r.f.att&&r.f.sat).length}/${A.filter(r=>r.f.att).length}</b></td>`
+            : `<td>${mini(s.id,'pay',s)}</td><td>${mini(s.id,'ins',s)}</td><td>${mini(s.id,'m2',s)}</td>`;
+          return `<tr class="click" data-sess="${s.id}"><td class="nw"><div style="font-weight:700">${s.n}회차</div>${pchip(s.p)}</td><td class="nw">${fmtMD(s.start)}–${s.end.getMonth()===s.start.getMonth()?s.end.getDate()+'일':fmtMD(s.end)}</td><td>${statusChip(s)}</td><td><b>${A.length}</b><span class="muted">/${s.cap}</span></td>${cells}</tr>`;
+        }).join('')}</tbody></table></div></div>
+    <div class="card"><div class="card-h"><h2>오늘 할 일</h2><span class="chip bad">${T.filter(t=>t.sev==='bad').length} 긴급</span></div>
+      <div class="card-b">${T.slice(0,6).map((t,i)=>`<div class="todo"><div class="ti ${t.sev}">${ic[t.ico]}</div><div style="min-width:0"><b>${t.t}</b><small>${t.d}</small><br><button class="btn sm" data-todo="${i}">${t.btn} ${ic.chev}</button></div></div>`).join('') || '<div class="muted">처리할 일이 없어요.</div>'}</div></div>
+  </div>`;
+}
+
+/* ===== 화면: 회차 상세 ===== */
+function stepCell(s,r,key){
+  const f=r.f;
+  if(key==='g') return `<span class="sb on fix" title="합격">${ic.check}</span>`;
+  if(key==='att'){
+    if(!s.done) return '<span class="dash">–</span>';
+    return `<button class="sb ${f.att?'on':'no'}" data-tg="${s.id}|${r.i}|att" title="${f.att?'참석':'불참'}">${f.att?ic.check:ic.x}</button>`;
+  }
+  if(key==='sat'){
+    if(!s.done || !f.att) return '<span class="dash">–</span>';
+    return `<button class="sb ${f.sat?'on':''}" data-tg="${s.id}|${r.i}|sat">${ic.check}</button>`;
+  }
+  const late = !f[key] && !s.done && s.days<=3 && (key==='pay'||key==='ins');
+  return `<button class="sb ${f[key]?'on':''} ${late?'late':''}" data-tg="${s.id}|${r.i}|${key}">${ic.check}</button>`;
+}
+function sess(){
+  const s=S(st.sid), R=recs(s.id), A=act(s.id), P=PROG[s.p];
+  const idx=SESS.filter(x=>x.p===s.p), pos=idx.findIndex(x=>x.id===s.id);
+  const pick=[0,1,2].map(t=>A.filter(r=>r.trans===t).length);
+  const rd=refundDeadline(s), rdd=diff(rd,TODAY);
+  const hold = s.done?0:A.filter(r=>!r.f.ins).length;
+  const sc=(k)=>ratio(s.id,k);
+  return `
+  <div class="crumb"><a data-go="dash">홈</a> ${ic.chev} <a data-go="dash">${P.name}</a> ${ic.chev} <span>${s.n}회차</span></div>
+  <div class="top"><div><h1>${pchip(s.p)} <span style="margin-left:2px">${s.n}회차</span> &nbsp;${statusChip(s)}</h1>
+      <div class="sub">${fmtMD(s.start)} – ${fmtMD(s.end)} · 참가비 ${P.fee.toLocaleString()}원 · 환불 가능 기한 <b style="color:${!s.done&&rdd>=0&&rdd<=1?'var(--bad)':'inherit'}">${fmtMD(rd)}${rdd===0?' (오늘)':''}</b> <span class="muted">(시작 3일 전까지 100%)</span></div></div>
+    <div class="sp"></div>
+    <div class="acts"><div class="seg">${idx.map((x,j)=>`<button class="${x.id===s.id?'on':''}" data-sess="${x.id}">${j+1}회</button>`).join('')}</div>
+    <button class="btn" data-act="ins">${ic.dl} 보험사 명단 다운로드</button>
+    <button class="btn pri" data-go-send="${s.id}">${ic.send} 문자·메일 발송 준비</button></div></div>
+  ${hold?`<div class="ban warn">${ic.lock}<div class="sp"><b>주민번호 ${hold}건을 별도 보관 중입니다.</b><br><span style="color:var(--ink2)">화면에는 표시되지 않아요. 보험 가입 완료를 체크하면 해당 주민번호가 삭제됩니다.</span></div></div>`:''}
+  <div class="sum">
+    <div class="card"><div class="l">확정 인원</div><div class="v">${A.length}<small> / ${s.cap}명</small></div></div>
+    <div class="card"><div class="l">참가비 입금</div><div class="v">${sc('pay')[0]}<small> / ${A.length}</small></div></div>
+    <div class="card"><div class="l">여행자보험</div><div class="v">${sc('ins')[0]}<small> / ${A.length}</small></div></div>
+    <div class="card"><div class="l">최종 안내</div><div class="v">${sc('m2')[0]}<small> / ${A.length}</small></div></div>
+    <div class="card"><div class="l">${ic.car.replace('<svg','<svg width="14" height="14" style="vertical-align:-2px"')} 픽업 필요</div><div class="v" style="color:${pick[1]+pick[2]?'var(--warn)':'inherit'}">${pick[1]+pick[2]}<small>명</small></div>
+      <div class="pick"><span class="chip">고속터미널 ${pick[1]}</span><span class="chip">시외터미널 ${pick[2]}</span><span class="chip">자차 ${pick[0]}</span></div></div>
+  </div>
+  <div class="card"><div class="scroll"><table class="tbl">
+    <thead><tr><th>참여자</th><th>연락처</th><th>이동수단</th>${STEPS.map(x=>`<th class="c">${x[1]}</th>`).join('')}</tr></thead>
+    <tbody>${R.map(r=>{const p=person(r.k);return `
+      <tr class="click ${r.cancel?'cx':''}" data-who="${s.id}|${r.i}">
+        <td><div class="name"><div class="av">${p.name[0]}</div><div><b>${p.name} ${r.cancel?'<span class="chip bad" style="margin-left:4px">취소</span>':''}</b><small>${p.job} · ${p.gender} · ${p.birth}년생</small></div></div></td>
+        <td class="muted">${p.phone}</td>
+        <td data-stop><select class="tsel ${r.trans?'warn':''}" data-trans="${s.id}|${r.i}" ${r.cancel?'disabled':''} title="이동수단 변경">${TRANS_S.map((t,j)=>`<option value="${j}" ${j===r.trans?'selected':''}>${t}</option>`).join('')}</select></td>
+        ${r.cancel?`<td colspan="7" class="muted">취소 사유: ${r.reason} · 환불 ${rdd>=0?'100% 대상':'불가'}</td>`:STEPS.map(x=>`<td class="c" data-stop>${stepCell(s,r,x[0])}</td>`).join('')}
+      </tr>`}).join('')}</tbody></table></div></div>
+  <div class="muted" style="margin-top:10px;font-size:12.5px">체크 버튼을 누르면 단계가 완료/미완료로 바뀌고, 이동수단은 목록에서 바로 바꿀 수 있어요. 이름을 누르면 연락처·메모·취소 처리까지 수정할 수 있습니다. 주황 테두리는 참여 D-3 안인데 아직 안 된 항목이에요.</div>`;
+}
+
+/* ===== 참여자 상세 (drawer) · 보기 / 수정 ===== */
+const PENCIL = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>';
+function openWho(sid,i,edit){
+  st.who={sid,i,edit:!!edit};
+  const s=S(sid), r=recs(sid)[i], p=person(r.k), E=!!edit;
+  const order=[['신청 접수',-30],['합격 확정',-26],['1차 안내 메일 발송',-24],['참가비 입금',-18],['여행자보험 가입',-5],['최종 안내 발송',-2],['참석',0],['만족도 응답',3]];
+  const keys=['a','g','m1','pay','ins','m2','att','sat'];
+  const on = k => k==='a'||k==='g' ? 1 : (k==='att' ? r.f.att : r.f[k]);
+  const rd=refundDeadline(s), rdd=diff(rd,TODAY);
+  const refund = rdd>=0 ? `<b>100% 환불</b> 대상` : '환불 <b>불가</b> (기한 경과)';
+  const esc=v=>String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const inp=(id,v)=>`<input type="text" id="${id}" value="${esc(v)}">`;
+  const sel=(id,opts,v)=>`<select id="${id}">${opts.map(o=>`<option value="${o[0]}" ${String(o[0])===String(v)?'selected':''}>${o[1]}</option>`).join('')}</select>`;
+  const yn=[[1,'동의'],[0,'미동의']];
+  const head=`<div class="row" style="justify-content:space-between;align-items:flex-start"><div class="name"><div class="av" style="width:44px;height:44px;font-size:17px">${p.name[0]}</div><div><h3>${p.name}</h3><span class="muted">${pchip(s.p)} · ${s.n}회차 ${r.cancel?'· 취소':''}</span></div></div>
+    <div class="row" style="gap:6px">${E?`<button class="btn sm" data-edit-cancel>취소</button><button class="btn sm pri" data-edit-save>저장</button>`:`<button class="btn sm" data-edit>${PENCIL} 수정</button><button class="btn sm ghost" data-close>${ic.x}</button>`}</div></div>`;
+  let body;
+  if(E){
+    body=`<div class="edit-ban">수정 중입니다. <b>이름·연락처·이메일·직업·거주지·동의 항목</b>은 이 사람의 모든 회차에 적용되고, <b>이동수단·신청 상태·남긴 말</b>은 이 회차에만 적용돼요.</div>
+    <div class="sec">기본 정보 (모든 회차 공통)</div>
+    <dl class="kv"><dt>이름</dt><dd>${inp('e-name',p.name)}</dd><dt>연락처</dt><dd>${inp('e-phone',p.phone)}</dd><dt>이메일</dt><dd>${inp('e-email',p.email)}</dd><dt>직업</dt><dd>${inp('e-job',p.job)}</dd><dt>거주지</dt><dd>${inp('e-area',p.area)}</dd>
+      <dt>성별 · 출생</dt><dd class="muted">${p.gender} · ${p.birth}년생 (신청서 기준)</dd><dt>추가 보유</dt><dd>${sel('e-consent',yn,p.consent?1:0)}</dd><dt>초상권</dt><dd>${sel('e-portrait',yn,p.portrait?1:0)}</dd></dl>
+    <div class="sec">이 회차 정보</div>
+    <dl class="kv"><dt>이동수단</dt><dd>${sel('e-trans',TRANS.map((t,j)=>[j,t]),r.trans)}</dd><dt>신청 상태</dt><dd>${sel('e-status',[['o','참여'],['x','취소']],r.cancel?'x':'o')}</dd><dt>취소 사유</dt><dd>${inp('e-reason',r.reason||'')}</dd><dt>남긴 말</dt><dd><textarea id="e-memo">${esc(r.memo||'')}</textarea></dd></dl>
+    <div class="note">지금 취소하면 ${refund}입니다. (환불 가능 기한 ${fmtMD(rd)})</div>`;
+  } else {
+    body=`<dl class="kv"><dt>연락처</dt><dd>${p.phone}</dd><dt>이메일</dt><dd>${p.email}</dd><dt>성별 · 출생</dt><dd>${p.gender} · ${p.birth}년생</dd><dt>직업 · 거주지</dt><dd>${p.job} · ${p.area}</dd>
+      <dt>이동수단</dt><dd><span class="chip ${r.trans?'warn':''}">${TRANS[r.trans]}</span> ${r.trans?'<span class="muted" style="font-size:12.5px">운영진 픽업 필요</span>':''}</dd>
+      <dt>동의 항목</dt><dd><span class="chip ${p.consent?'ok':'bad'}">추가 보유 ${p.consent?'동의':'미동의'}</span> <span class="chip ${p.portrait?'ok':'bad'}">초상권 ${p.portrait?'동의':'미동의'}</span></dd>
+      <dt>주민번호</dt><dd>${r.f.ins?'<span class="chip">삭제됨</span>':'<span class="chip warn">'+ic.lock.replace('<svg','<svg width="12" height="12"')+' 별도 보관 중</span>'}</dd>
+      <dt>${p.consent?'보관 만료':'파기 예정'}</dt><dd>${p.consent?'마지막 참여 후 3년 (2029.'+(s.end.getMonth()+1)+'.'+s.end.getDate()+')':'2026.12.31 연말 삭제'}</dd></dl>
+    <div class="sec">진행 단계</div>
+    <ul class="tl">${order.map((o,j)=>{const k=keys[j];const v=on(k);return `<li class="${v?'on':''}"><span class="dotx">${ic.check}</span>${o[0]}<span class="d">${v?fmtMD(addDays(s.start,o[1])):(k==='att'&&!s.done?'프로그램 시작 후':'대기')}</span></li>`}).join('')}</ul>
+    <div class="sec">운영진에게 하고 싶은 말</div>
+    <div class="note">${r.memo?esc(r.memo):'남긴 말이 없어요.'}</div>
+    <div class="sec">환불 안내</div>
+    <div class="note">${r.cancel?`취소 접수됨 (${esc(r.reason)}) · ${refund}`:rdd>=0?`${fmtMD(rd)}까지 취소하면 <b>100% 환불</b>됩니다. (${rdd===0?'오늘이 마지막 날':'D-'+rdd})`:'환불 가능 기한이 지나 환불이 불가합니다.'}</div>
+    <div class="sec">최근 발송 기록</div>
+    <div class="note">10/07 1차 안내 메일 · 10/05 합격 문자(홈페이지 시스템)</div>`;
+  }
+  document.getElementById('drawer').innerHTML = `<div class="dim" ${E?'':'data-close'}></div><div class="panel">${head}${body}</div>`;
+  document.getElementById('drawer').classList.add('open');
+}
+function saveWho(){
+  const {sid,i}=st.who, r=recs(sid)[i], g=id=>document.getElementById(id).value;
+  const p0=person(r.k);
+  OVR[r.k]=Object.assign(OVR[r.k]||{}, {
+    name:g('e-name').trim()||p0.name, phone:g('e-phone').trim()||p0.phone, email:g('e-email').trim()||p0.email,
+    job:g('e-job').trim()||p0.job, area:g('e-area').trim()||p0.area, consent:g('e-consent')==='1', portrait:g('e-portrait')==='1'});
+  r.trans=+g('e-trans'); r.memo=g('e-memo').trim();
+  r.cancel=g('e-status')==='x'; r.reason=r.cancel?(g('e-reason').trim()||'사유 미입력'):'';
+  render(); openWho(sid,i,false); toast('저장했어요');
+}
+
+/* ===== 화면: 참여자 ===== */
+function people(){
+  const seen=new Map();
+  SESS.forEach(s=>recs(s.id).forEach(r=>{ if(!seen.has(r.k)) seen.set(r.k,[]); seen.get(r.k).push(r); }));
+  let rows=[...seen.entries()].map(([k,rs])=>({k,rs,p:person(k)}));
+  const q=st.q.trim(); if(q) rows=rows.filter(x=>x.p.name.includes(q)||x.p.phone.includes(q));
+  rows.sort((a,b)=>b.rs.length-a.rs.length||a.p.name.localeCompare(b.p.name,'ko'));
+  return `
+  <div class="top"><div><h1>참여자</h1><div class="sub">한 사람이 여러 프로그램·회차에 참여한 이력을 함께 봅니다.</div></div><div class="sp"></div>
+    <input type="text" id="q" placeholder="이름 또는 연락처 검색" value="${st.q}" style="width:260px"></div>
+  <div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>이름</th><th>연락처</th><th>참여 이력</th><th>개인정보 추가 보유</th><th>보관 일정</th></tr></thead><tbody>
+  ${rows.slice(0,24).map(x=>{const last=x.rs.map(r=>S(r.sid)).sort((a,b)=>b.end-a.end)[0];return `<tr class="click" data-who="${last.id}|${x.rs.find(r=>r.sid===last.id).i}">
+    <td><div class="name"><div class="av">${x.p.name[0]}</div><div><b>${x.p.name}</b><small>${x.p.job} · ${x.p.birth}년생</small></div></div></td>
+    <td class="muted">${x.p.phone}</td>
+    <td><div class="row" style="gap:6px">${x.rs.map(r=>{const z=S(r.sid);return `<span class="chip" style="${r.cancel?'text-decoration:line-through;opacity:.6':''}"><i style="width:7px;height:7px;border-radius:99px;background:${PROG[z.p].c};display:inline-block"></i>${PROG[z.p].name} ${z.n}회</span>`}).join('')}</div></td>
+    <td><span class="chip ${x.p.consent?'ok':'bad'}">${x.p.consent?'동의':'미동의'}</span></td>
+    <td class="muted">${x.p.consent?'마지막 참여 후 3년':'2026.12.31 삭제'}</td></tr>`}).join('')}
+  </tbody></table></div></div>
+  <div class="muted" style="margin-top:10px;font-size:12.5px">${rows.length}명 중 24명 표시 · 주민번호는 이 화면 어디에도 표시되지 않습니다.</div>`;
+}
+
+/* ===== 화면: 신청 엑셀 업로드 ===== */
+function up(){
+  const rows=[
+    ['101','이서준','3회차 | 10/19(월)-21(수)','합격','동의','신규','ok'],
+    ['102','박지우','3회차 | 10/19(월)-21(수)','합격','미동의','신규','ok'],
+    ['103','최도윤','2회차 | 10/12(월)-14(수)','합격','동의','이미 등록됨 (홈페이지 번호 중복)','warn'],
+    ['104','정서연','3회차 | 10/19(월)-21(수)','불합격','동의','불합격 · 명단에서 제외','muted'],
+    ['105','강민재','3회차(10/19)','합격','동의','회차를 확인해 주세요','bad'],
+    ['106','조예린','5회차 | 10/26(월)-28(수)','합격','동의','신규','ok']];
+  return `
+  <div class="top"><div><h1>신청 엑셀 업로드</h1><div class="sub">홈페이지에서 내려받은 신청자 명단을 올리면 회차별 참여자로 등록됩니다.</div></div></div>
+  <div class="steps"><div class="s done"><i>✓</i>파일 선택</div><div class="s on"><i>2</i>내용 확인</div><div class="s"><i>3</i>등록 완료</div></div>
+  <div class="two">
+    <div class="stack">
+      <div class="card card-b"><div class="drop"><div class="ic">${ic.file}</div><div style="flex:1"><b>신청자명단_20261009.xlsx</b><div class="muted">6행 읽음 · 열 14개 인식</div></div><button class="btn sm">파일 바꾸기</button></div>
+        <div class="row" style="margin-top:14px"><div><label class="f">등록할 프로그램</label><select><option>일해보기</option><option>살아보기</option><option>자라보기</option></select></div>
+        <div style="flex:1"></div></div></div>
+      <div class="card"><div class="card-h"><h2>미리보기</h2><span class="chip">6행</span></div><div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>번호</th><th>이름</th><th>신청 회차</th><th>합격</th><th>추가 보유</th><th>확인 결과</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td class="muted nw">${r[0]}</td><td class="nw"><b>${r[1]}</b></td><td>${r[2]}</td><td class="nw"><span class="chip ${r[3]==='합격'?'ok':''}">${r[3]}</span></td><td class="nw">${r[4]}</td><td><span class="chip ${r[6]==='ok'?'ok':r[6]}">${r[5]}</span></td></tr>`).join('')}</tbody></table></div></div>
+    </div>
+    <div class="stack">
+      <div class="card card-b"><b>등록 요약</b>
+        <div class="kv" style="grid-template-columns:1fr auto;margin:10px 0 0"><dt>새로 등록</dt><dd><b>3명</b></dd><dt>이미 등록됨 (건너뜀)</dt><dd>1명</dd><dt>불합격 (제외)</dt><dd>1명</dd><dt style="color:var(--bad)">확인 필요</dt><dd style="color:var(--bad)"><b>1명</b></dd></div>
+        <div class="ban warn" style="margin:14px 0 0">${ic.warn}<div class="sp"><b>"3회차(10/19)"를 회차에 연결해 주세요</b><div style="margin-top:6px"><select><option>일해보기 3회차 · 10/19(월)–21(수)</option><option>일해보기 2회차 · 10/12(월)–14(수)</option></select></div></div></div>
+        <div class="row" style="margin-top:14px"><button class="btn pri" data-toast="시안입니다. 구현 단계에서 실제 등록이 연결됩니다">3명 등록하기</button><button class="btn ghost">취소</button></div></div>
+      <div class="card card-b"><div class="row" style="gap:10px;align-items:flex-start"><span style="color:var(--pri)">${ic.lock.replace('<svg','<svg width="20" height="20"')}</span><div><b>주민번호는 따로 보관돼요</b><div class="muted" style="margin-top:3px">엑셀에서 읽은 주민번호는 일반 정보와 분리해 저장하고 화면에는 보이지 않습니다. 보험 가입 완료를 체크하면 삭제됩니다.</div></div></div></div>
+      <div class="card card-b"><b>연결되는 항목</b><div class="muted" style="margin-top:6px;line-height:1.9">이름 · 연락처 · 이메일 · 성별 · 출생연도 · 직업 · 거주지<br>신청 회차 · 합격여부 · 초상권 동의 · 추가 보유 동의<br>운영진에게 하고 싶은 말 · 신청일 · 취소사유</div></div>
+    </div>
+  </div>`;
+}
+
+/* ===== 화면: 발송 준비 ===== */
+const esc = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const STAGE = {
+  m1:{name:'1차 안내', f:'all', ch:'mail'},
+  pay:{name:'입금 요청', f:'pay', ch:'sms'},
+  m2:{name:'최종 안내', f:'m2', ch:'sms'},
+  sat:{name:'만족도 요청', f:'sat', ch:'sms'},
+  etc:{name:'기타', f:'all', ch:'sms'}
+};
+const PLABEL = {all:'공통', w:'일해보기', l:'살아보기', g:'자라보기'};
+const CHLABEL = {sms:'문자', mail:'메일'};
+/* 저장한 문구 (단계 × 프로그램). 본문은 {이름} 같은 자리표시자 형태로 저장하므로 개인정보가 들어가지 않음 */
+const SAVED = [
+  {id:1, name:'1차 안내 기본', stage:'m1', prog:'all', channel:'mail', at:'2026-09-01', body:'{이름}님, 곁마을 {프로그램} {회차}에 함께해 주셔서 감사합니다. 상세 시간표와 참가비 안내를 보내드립니다. 참가비는 {참가비}원이며, 입금 후 알려 주세요.'},
+  {id:2, name:'입금 요청 기본', stage:'pay', prog:'all', channel:'sms', at:'2026-09-01', body:'[곁마을] {이름}님, {프로그램} {회차} 참가비 {참가비}원 입금이 아직 확인되지 않았어요. 참여 3일 전인 {환불기한}까지 취소하면 전액 환불됩니다.'},
+  {id:3, name:'최종 안내 기본', stage:'m2', prog:'all', channel:'sms', at:'2026-09-01', body:'[곁마을] {이름}님, {회차} {날짜}가 곧 시작돼요. 집결 시간과 장소는 메일을 확인해 주세요. 이동수단: {이동수단}'},
+  {id:4, name:'만족도 요청 기본', stage:'sat', prog:'all', channel:'sms', at:'2026-09-01', body:'[곁마을] {이름}님, {프로그램} {회차}는 어떠셨나요? 짧은 만족도 조사에 참여해 주세요. {폼링크}'},
+  {id:5, name:'일해보기 최종 안내 (준비물 포함)', stage:'m2', prog:'w', channel:'sms', at:'2026-09-20', body:'[곁마을] {이름}님, {회차} {날짜}가 곧 시작돼요. 노트북과 충전기를 꼭 챙겨 주세요. 집결 시간과 장소는 메일을 확인해 주세요. 이동수단: {이동수단}'},
+  {id:6, name:'자라보기 만족도 요청', stage:'sat', prog:'g', channel:'sms', at:'2026-09-30', body:'[곁마을] {이름}님, {회차}에 참여해 주셔서 감사해요. 자라보기 후기를 남겨 주세요. {폼링크}'}
+];
+let SAVED_SEQ = 100;
+function pickSaved(stage, prog){
+  const L = SAVED.filter(x=>x.stage===stage);
+  return L.filter(x=>x.prog===prog).slice(-1)[0] || L.filter(x=>x.prog==='all').slice(-1)[0] || null;
+}
+function curBody(){
+  const o=st.send; if(o.body!=null) return o.body;
+  const x=pickSaved(o.tpl, S(o.sid).p); return x ? x.body : '';
+}
+const FILT = {all:'확정 인원 전체', pay:'입금 미완료', ins:'보험 미가입', m2:'최종 안내 미발송', sat:'만족도 미응답'};
+function targets(sid,f){
+  let a=act(sid); const s=S(sid);
+  if(f==='pay') a=a.filter(r=>!r.f.pay); else if(f==='ins') a=a.filter(r=>!r.f.ins); else if(f==='m2') a=a.filter(r=>!r.f.m2);
+  else if(f==='sat') a=a.filter(r=>r.f.att&&!r.f.sat);
+  return a;
+}
+function fill(t,s,r){
+  const p=person(r.k), P=PROG[s.p];
+  return t.replaceAll('{이름}',p.name).replaceAll('{프로그램}',P.name).replaceAll('{회차}',s.n+'회차').replaceAll('{날짜}',fmtMD(s.start)+'–'+fmtMD(s.end))
+    .replaceAll('{참가비}',P.fee.toLocaleString()).replaceAll('{환불기한}',fmtMD(refundDeadline(s))).replaceAll('{이동수단}',TRANS_S[r.trans]).replaceAll('{폼링크}','forms.gle/example');
+}
+function previewInfo(){
+  const o=st.send, s=S(o.sid), T=targets(o.sid,o.filter), body=curBody(), first=T[0];
+  const pv = first ? fill(body,s,first) : body, len = pv.length;
+  const info = `${first?person(first.k).name+'님 기준 미리보기 · ':''}${len}자 ${o.channel==='sms'?(len>45?'<span class="chip warn">장문(LMS)</span>':'<span class="chip">단문</span>'):''}`;
+  return {pv, info};
+}
+function refreshPreview(){
+  const {pv,info}=previewInfo();
+  const a=document.getElementById('pv'), b=document.getElementById('cnt');
+  if(a) a.textContent = pv || '문구가 비어 있어요. 아래에서 저장한 문구를 불러오거나 직접 써 주세요.';
+  if(b) b.innerHTML = info;
+}
+function send(){
+  const o=st.send, s=S(o.sid), T=targets(o.sid,o.filter), body=curBody();
+  const {pv,info}=previewInfo();
+  const sStage=o.saveStage||o.tpl, sProg=o.saveProg||s.p;
+  const cs=o.libStage||'cur', cp=o.libProg||'cur';
+  const lib=SAVED.filter(x=>(cs==='every'||x.stage===(cs==='cur'?o.tpl:cs)) && (cp==='every'||(cp==='cur'?(x.prog===s.p||x.prog==='all'):x.prog===cp)));
+  const stOpt = (v,sel)=>Object.entries(STAGE).map(([k,z])=>`<option value="${k}" ${k===sel?'selected':''}>${z.name}</option>`).join('');
+  return `
+  <div class="top"><div><h1>문자·메일 발송 준비</h1><div class="sub">대상과 문구를 만들어 복사한 뒤, 알리고에서 직접 발송하세요. 자주 쓰는 문구는 단계·프로그램별로 저장해 두고 다시 불러올 수 있어요.</div></div></div>
+  <div class="two">
+    <div class="stack">
+      <div class="card card-b"><div class="row">
+        <div><label class="f">회차</label><select id="sd-s">${SESS.map(z=>`<option value="${z.id}" ${z.id===o.sid?'selected':''}>${PROG[z.p].name} ${z.n}회차 · ${fmtMD(z.start)}</option>`).join('')}</select></div>
+        <div><label class="f">대상</label><select id="sd-f">${Object.entries(FILT).map(([k,v])=>`<option value="${k}" ${k===o.filter?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div><label class="f">방식</label><div class="seg"><button class="${o.channel==='sms'?'on':''}" data-ch="sms">문자</button><button class="${o.channel==='mail'?'on':''}" data-ch="mail">메일</button></div></div></div></div>
+      <div class="card card-b">
+        <div class="row" style="justify-content:space-between;margin-bottom:10px"><b>문구</b>
+          <div class="seg">${Object.entries(STAGE).map(([k,z])=>`<button class="${k===o.tpl?'on':''}" data-stage="${k}">${z.name}</button>`).join('')}</div></div>
+        <textarea id="msgbox" placeholder="문구를 직접 쓰거나, 아래 저장한 문구에서 불러오세요.">${esc(body)}</textarea>
+        <div class="muted" style="font-size:12.5px;margin:6px 0 0">{이름} {프로그램} {회차} {날짜} {참가비} {환불기한} {이동수단} {폼링크}는 대상자마다 자동으로 바뀝니다. 직접 고쳐서 써도 돼요.</div>
+        <div class="sec">미리보기</div>
+        <div class="note" id="pv" style="white-space:pre-wrap">${esc(pv)||'문구가 비어 있어요. 아래에서 저장한 문구를 불러오거나 직접 써 주세요.'}</div>
+        <div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted" style="font-size:12.5px" id="cnt">${info}</span>
+          <button class="btn sm" data-copy="msg">${ic.copy} 문구 복사</button></div>
+        <div class="sec">이 문구 저장하기</div>
+        <div class="row" style="gap:8px">
+          <input type="text" id="sv-name" placeholder="저장 이름 (예: 일해보기 최종 안내)" value="${esc(o.saveName||'')}" style="flex:1;min-width:190px">
+          <select id="sv-stage">${stOpt('',sStage)}</select>
+          <select id="sv-prog">${Object.entries(PLABEL).map(([k,v])=>`<option value="${k}" ${k===sProg?'selected':''}>${k==='all'?'모든 프로그램 공통':v}</option>`).join('')}</select>
+          <button class="btn pri" data-save-msg>${ic.check.replace('<svg','<svg width="16" height="16"')} 저장</button></div>
+        <div class="muted" style="font-size:12.5px;margin-top:6px">같은 이름·단계·프로그램으로 저장하면 기존 문구를 덮어써요.</div>
+      </div>
+      <div class="card"><div class="card-h"><h2>저장한 문구</h2><span class="chip">${lib.length}개</span><div class="sp"></div>
+          <select id="lib-stage"><option value="cur" ${cs==='cur'?'selected':''}>현재 단계 (${STAGE[o.tpl].name})</option><option value="every" ${cs==='every'?'selected':''}>전체 단계</option>${Object.entries(STAGE).map(([k,z])=>`<option value="${k}" ${cs===k?'selected':''}>${z.name}</option>`).join('')}</select>
+          <select id="lib-prog"><option value="cur" ${cp==='cur'?'selected':''}>현재 프로그램 + 공통</option><option value="every" ${cp==='every'?'selected':''}>전체 프로그램</option>${Object.entries(PLABEL).map(([k,v])=>`<option value="${k}" ${cp===k?'selected':''}>${v}만</option>`).join('')}</select></div>
+        <div class="card-b" style="padding-top:8px">${lib.length?lib.map(x=>`<div class="todo" style="align-items:center"><div style="min-width:0;flex:1"><b>${esc(x.name)}</b>
+            <div style="margin:4px 0 5px;display:flex;gap:5px;flex-wrap:wrap"><span class="chip pri">${STAGE[x.stage].name}</span><span class="chip">${x.prog==='all'?'공통':'<i style="width:7px;height:7px;border-radius:99px;display:inline-block;background:'+PROG[x.prog].c+'"></i>'+PLABEL[x.prog]}</span><span class="chip">${CHLABEL[x.channel]}</span><span class="muted" style="font-size:12px">${x.at} 저장</span></div>
+            <small>${esc(x.body.length>70?x.body.slice(0,70)+'…':x.body)}</small></div>
+          <div style="display:flex;flex-direction:column;gap:6px"><button class="btn sm pri" data-lib-use="${x.id}">불러오기</button><button class="btn sm ghost" data-lib-del="${x.id}">삭제</button></div></div>`).join(''):'<div class="note">조건에 맞는 저장한 문구가 없어요. 위에서 문구를 쓰고 저장해 보세요.</div>'}</div></div>
+    </div>
+    <div class="stack">
+      <div class="card card-b"><div class="row" style="justify-content:space-between;margin-bottom:10px"><b>${o.channel==='sms'?'수신 번호':'수신 메일'} <span class="chip pri">${T.length}명</span></b>
+        <button class="btn sm pri" data-copy="rcpt" ${T.length?'':'disabled'}>${ic.copy} ${o.channel==='sms'?'번호':'메일'} ${T.length}건 복사</button></div>
+        ${T.length?`<div class="rcpt">${T.map(r=>{const p=person(r.k);return `<div><span>${esc(p.name)}</span><span class="muted">${o.channel==='sms'?p.phone:esc(p.email)}</span></div>`}).join('')}</div>`:'<div class="note">이 조건에 해당하는 사람이 없어요.</div>'}
+        <div class="row" style="margin-top:14px"><button class="btn" data-log="1" ${T.length&&body.trim()?'':'disabled'}>${ic.check.replace('<svg','<svg width="16" height="16"')} 발송 완료로 기록</button><span class="muted" style="font-size:12.5px">보낸 문구도 함께 기록돼요</span></div></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="card-h"><h2>발송 기록</h2><span class="muted" style="font-size:12.5px">보낸 문구가 함께 남아요. "다시 쓰기"는 문구 입력칸으로 불러오고, "저장"은 저장한 문구에 추가해요.</span></div>
+    <div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>시각</th><th>회차</th><th>단계</th><th>방식</th><th>인원</th><th>보낸 문구</th><th></th></tr></thead><tbody id="hist">${histRows()}</tbody></table></div></div>`;
+}
+const histRows = () => HIST.map((h,i)=>`<tr><td class="muted nw">${h.t}</td><td class="nw">${pchip(S(h.s).p)} ${S(h.s).n}회차</td>
+  <td class="nw"><span class="chip pri">${STAGE[h.stage].name}</span></td><td class="nw"><span class="chip">${h.ch}</span></td><td class="nw"><b>${h.n}</b>명</td>
+  <td style="color:var(--ink2);min-width:280px">${esc(h.body.length>90?h.body.slice(0,90)+'…':h.body)}</td>
+  <td class="nw" style="text-align:right"><button class="btn sm" data-hist-use="${i}">다시 쓰기</button> <button class="btn sm ghost" data-hist-save="${i}">저장</button></td></tr>`).join('');
+
+/* ===== 화면: 만족도 ===== */
+function sat(){
+  const P=PROG[st.satProg], done=SESS.filter(s=>s.p===st.satProg&&s.done);
+  const miss=done.flatMap(s=>act(s.id).filter(r=>r.f.att&&!r.f.sat).map(r=>({s,r})));
+  const resp=done.flatMap(s=>act(s.id).filter(r=>r.f.att&&r.f.sat).map(r=>({s,r})));
+  const auto=resp.slice(0,3);
+  return `
+  <div class="top"><div><h1>만족도 조사</h1><div class="sub">프로그램마다 다른 구글폼의 응답을 가져와 참여자와 자동으로 연결합니다.</div></div><div class="sp"></div>
+    <div class="seg">${Object.entries(PROG).map(([k,v])=>`<button class="${st.satProg===k?'on':''}" data-sp="${k}">${v.name}</button>`).join('')}</div></div>
+  <div class="card card-b" style="margin-bottom:16px"><div class="row"><span class="chip ok dot">연결됨</span><b>${P.form}</b><span class="muted">구글폼 응답 시트 · 방금 동기화</span><div style="flex:1"></div><button class="btn sm" data-toast="응답 시트에서 새 응답을 가져왔어요 (샘플)">새 응답 가져오기</button></div></div>
+  <div class="three" style="margin-bottom:16px">
+    ${[1,2,3].map(n=>{const s=S(st.satProg+n);if(!s.done) return `<div class="card kpi"><div class="l">${n}회차</div><div class="v" style="font-size:18px;color:var(--muted)">진행 전</div><div class="d">${fmtMD(s.start)} 시작</div></div>`;
+      const a=act(s.id).filter(r=>r.f.att), d=a.filter(r=>r.f.sat).length, p=a.length?Math.round(d/a.length*100):0;
+      return `<div class="card kpi"><div class="l">${n}회차 응답률</div><div class="v">${p}<small>% · ${d}/${a.length}명</small></div><div class="bar"><i style="width:${p}%"></i></div></div>`}).join('')}
+  </div>
+  <div class="two">
+    <div class="card"><div class="card-h"><h2>응답 연결 확인</h2><span class="chip warn">확인 필요 2</span></div>
+      <div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>응답자가 적은 내용</th><th>연결 결과</th></tr></thead><tbody>
+      ${auto.map(x=>`<tr><td><b>${person(x.r.k).name}</b> · ${x.s.n}회차</td><td><span class="chip ok">자동 연결 · ${person(x.r.k).name}</span></td></tr>`).join('')}
+      ${miss[0]?(()=>{const nm=person(miss[0].r.k).name, typo=nm.slice(0,2)+(nm[2]==='우'?'아':'우');return `<tr><td><b>${typo}</b> · ${miss[0].s.n}회차 <div class="muted" style="font-size:12.5px">비슷한 이름: ${nm}</div></td><td><select><option>${nm} (${PROG[miss[0].s.p].name} ${miss[0].s.n}회차)로 연결</option><option>연결하지 않음</option></select> <button class="btn sm pri">확인</button></td></tr>`})():''}
+      <tr><td><b>김민준</b> · 1회차 <div class="muted" style="font-size:12.5px">같은 이름이 2명이에요</div></td><td><select><option>선택해 주세요</option><option>김민준 · 1998년생 · 서울 마포구</option><option>김민준 · 2001년생 · 부산 해운대구</option></select></td></tr>
+      </tbody></table></div></div>
+    <div class="card"><div class="card-h"><h2>아직 응답하지 않은 사람</h2><span class="chip">${miss.length}명</span></div><div class="card-b">
+      ${miss.length?`<div class="rcpt">${miss.map(x=>`<div><span>${person(x.r.k).name} <span class="muted">· ${x.s.n}회차</span></span><span class="muted">${person(x.r.k).phone}</span></div>`).join('')}</div>
+      <div class="row" style="margin-top:12px"><button class="btn pri" data-go-send="${miss[0].s.id}|sat">${ic.send} 리마인드 문구 만들기</button></div>`:'<div class="note">모두 응답했어요.</div>'}</div></div>
+  </div>`;
+}
+
+/* ===== 화면: 개인정보 ===== */
+function priv(){
+  const up=SESS.filter(s=>!s.done);
+  const hold=up.map(s=>({s,n:act(s.id).filter(r=>!r.f.ins).length})).filter(x=>x.n);
+  const total=hold.reduce((n,x)=>n+x.n,0);
+  const seen=new Map(); SESS.forEach(s=>recs(s.id).forEach(r=>{const p=person(r.k); if(!seen.has(r.k)) seen.set(r.k,{p,end:s.end}); else if(s.end>seen.get(r.k).end) seen.get(r.k).end=s.end;}));
+  const all=[...seen.values()], no=all.filter(x=>!x.p.consent), yes=all.filter(x=>x.p.consent).sort((a,b)=>a.end-b.end);
+  const exp=yes[0]?new Date(yes[0].end.getFullYear()+3,yes[0].end.getMonth(),yes[0].end.getDate()):null;
+  return `
+  <div class="top"><div><h1>개인정보 관리</h1><div class="sub">주민번호 보관 현황과 파기 예정 목록을 확인하고, 삭제를 직접 실행합니다.</div></div></div>
+  <div class="three" style="margin-bottom:16px">
+    <div class="card kpi"><div class="l">주민번호 보관 중</div><div class="v">${total}<small>건</small></div><div class="d">보험 가입 완료 시 삭제됩니다</div></div>
+    <div class="card kpi"><div class="l">연말 삭제 예정 (추가 보유 미동의)</div><div class="v">${no.length}<small>명</small></div><div class="d">삭제일 2026.12.31</div></div>
+    <div class="card kpi"><div class="l">가장 빠른 3년 보관 만료 (동의)</div><div class="v" style="font-size:22px">${exp?exp.getFullYear()+'.'+(exp.getMonth()+1)+'.'+exp.getDate():'-'}</div><div class="d">동의 ${yes.length}명 · 마지막 참여 후 3년</div></div>
+  </div>
+  <div class="two">
+    <div class="card"><div class="card-h"><h2>주민번호 보관 현황</h2></div><div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>회차</th><th>일정</th><th>보관 중</th><th></th></tr></thead><tbody>
+      ${hold.map(x=>`<tr class="click" data-sess="${x.s.id}"><td>${pchip(x.s.p)} ${x.s.n}회차</td><td class="muted">${fmtMD(x.s.start)}</td><td><b>${x.n}</b>건</td><td>${x.s.days<=7?'<span class="chip bad">보험 업로드 필요</span>':'<span class="chip">대기</span>'}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="card"><div class="card-h"><h2>연말 삭제 대상</h2><span class="chip">${no.length}명</span><div class="sp"></div><button class="btn sm" data-toast="삭제는 12월 말에 실행할 수 있어요 (샘플)">12월 말에 삭제</button></div>
+      <div class="card-b"><div class="rcpt" style="max-height:230px">${no.slice(0,8).map(x=>`<div><span>${x.p.name}</span><span class="muted">${x.p.phone}</span></div>`).join('')}</div></div></div>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="card-h"><h2>열람·다운로드 기록</h2></div><div class="card-b" style="padding-top:6px"><table class="tbl"><tbody>
+    <tr><td class="muted">10/08 09:41</td><td>운영진 1</td><td>보험사 명단 다운로드 · 일해보기 1회차 (5명)</td></tr>
+    <tr><td class="muted">10/07 14:05</td><td>운영진 2</td><td>신청 엑셀 업로드 · 일해보기 2회차 (8명)</td></tr>
+    <tr><td class="muted">10/05 10:12</td><td>운영진 1</td><td>보험사 명단 다운로드 · 자라보기 1회차 (8명)</td></tr>
+    <tr><td class="muted">10/01 16:30</td><td>운영진 3</td><td>주민번호 삭제 · 살아보기 1회차 (6건, 보험 가입 완료)</td></tr></tbody></table></div></div>`;
+}
+
+/* ===== 화면: 운영진 관리 (소유자 전용) ===== */
+const STAFF = [
+  {email:'owner@example.com', name:'소유자', role:'owner', added:'2026-09-01', active:true},
+  {email:'staff1@example.com', name:'운영진 1', role:'member', added:'2026-09-01', active:true},
+  {email:'staff2@example.com', name:'운영진 2', role:'member', added:'2026-09-01', active:true}
+];
+function staff(){
+  const act=STAFF.filter(x=>x.active), gone=STAFF.filter(x=>!x.active);
+  const ok='<span class="chip ok">공유됨</span>';
+  return `
+  <div class="top"><div><h1>운영진 관리</h1><div class="sub">운영진이 바뀌면 여기에서 이메일을 추가하거나 삭제하세요. 접속 권한과 파일 공유가 함께 바뀝니다.</div></div><div class="sp"></div><span class="chip warn">소유자 전용 화면</span></div>
+  <div class="two">
+    <div class="card"><div class="card-h"><h2>현재 운영진</h2><span class="chip pri">${act.length}명</span></div>
+      <div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>이름</th><th>구글 계정</th><th>역할</th><th>운영 DB · 주민번호 파일 · 백업 폴더</th><th></th></tr></thead><tbody>
+      ${act.map(x=>`<tr><td class="nw"><div class="name"><div class="av">${x.name[x.name.length-1]}</div><b>${x.name}</b></div></td><td class="muted nw">${x.email}</td><td><span class="chip ${x.role==='owner'?'pri':''}">${x.role==='owner'?'소유자':'운영진'}</span></td><td>${ok}</td>
+        <td class="nw" style="text-align:right">${x.role==='owner'?'<span class="muted" style="font-size:12.5px">삭제 불가</span>':`<button class="btn sm" data-staff-del="${x.email}">삭제</button>`}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="stack">
+      <div class="card card-b"><b>운영진 추가</b>
+        <div class="stack" style="margin-top:12px"><div><label class="f">이름</label><input type="text" id="st-name" placeholder="예: 운영진 4" style="width:100%"></div>
+        <div><label class="f">구글 계정 이메일</label><input type="text" id="st-email" placeholder="name@gmail.com" style="width:100%"></div>
+        <div><button class="btn pri" data-staff-add>${ic.check.replace('<svg','<svg width="16" height="16"')} 추가하고 공유하기</button></div></div></div>
+      <div class="ban warn" style="margin:0">${ic.warn}<div class="sp"><b>구글폼 응답 시트 3개</b>는 소유자 계정이 만든 파일이면 자동으로 공유돼요. 다른 계정이 만든 파일이면 직접 공유해 달라는 안내가 뜹니다.</div></div>
+      <div class="card card-b"><b>안내</b><div class="muted" style="margin-top:6px;line-height:1.8">· 삭제하면 그 사람은 바로 접속할 수 없고 파일 공유도 해제됩니다.<br>· 그 사람이 남긴 수정 기록은 그대로 남아요.<br>· 새 운영진은 처음 접속할 때 구글 권한 허용 창에서 한 번 승인해야 해요.<br>· 모두 구글 2단계 인증을 켜 두는 것을 권장해요.</div></div>
+      ${gone.length?`<div class="card card-b"><b>삭제한 운영진</b><div class="muted" style="margin-top:6px">${gone.map(x=>x.name+' · '+x.email).join('<br>')}</div></div>`:''}
+    </div>
+  </div>`;
+}
+
+/* ===== 렌더링 / 이벤트 ===== */
+function render(){
+  const m=document.getElementById('main'), y=window.scrollY;
+  m.innerHTML = ({dash,sess,people,up,send,sat,priv,staff})[st.screen]();
+  renderSide();
+  window.scrollTo(0,y);
+}
+function go(s,keep){ st.screen=s; if(!keep) window.scrollTo(0,0); render(); }
+function toast(t){ const e=document.getElementById('toast'); e.textContent=t; e.classList.add('show'); clearTimeout(toast.t); toast.t=setTimeout(()=>e.classList.remove('show'),2200); }
+function closeDrawer(){ document.getElementById('drawer').classList.remove('open'); }
+function copy(text,msg){ try{ navigator.clipboard.writeText(text).then(()=>toast(msg),()=>toast(msg)); }catch(e){ toast(msg); } }
+
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-go],[data-prog],[data-sess],[data-who],[data-tg],[data-todo],[data-close],[data-act],[data-go-send],[data-ch],[data-copy],[data-log],[data-sp],[data-toast],[data-edit],[data-edit-save],[data-edit-cancel],[data-staff-add],[data-staff-del],[data-stage],[data-save-msg],[data-lib-use],[data-lib-del],[data-hist-use],[data-hist-save]');
+  if(!t) return;
+  if(e.target.closest('[data-stop]') && !t.hasAttribute('data-tg')) return;
+  const d=t.dataset;
+  if('close' in d){ closeDrawer(); return; }
+  if('edit' in d){ openWho(st.who.sid,st.who.i,true); return; }
+  if('editCancel' in d){ openWho(st.who.sid,st.who.i,false); return; }
+  if('editSave' in d){ saveWho(); return; }
+  if(d.stage){ const o=st.send; o.tpl=d.stage; o.filter=STAGE[d.stage].f; o.channel=STAGE[d.stage].ch; o.body=null; o.saveStage=o.saveProg=null; render(); return; }
+  if('saveMsg' in d){
+    const o=st.send, s=S(o.sid), body=document.getElementById('msgbox').value;
+    if(!body.trim()){ toast('저장할 문구가 비어 있어요'); return; }
+    const stage=document.getElementById('sv-stage').value, prog=document.getElementById('sv-prog').value;
+    const name=document.getElementById('sv-name').value.trim() || `${prog==='all'?'공통':PLABEL[prog]} ${STAGE[stage].name}`;
+    const old=SAVED.find(x=>x.name===name&&x.stage===stage&&x.prog===prog);
+    if(old){ old.body=body; old.channel=o.channel; old.at='2026-10-09'; }
+    else SAVED.push({id:++SAVED_SEQ,name,stage,prog,channel:o.channel,at:'2026-10-09',body});
+    o.body=body; o.saveName=''; o.saveStage=o.saveProg=null;
+    toast(`${old?'덮어써서 ':''}저장했어요 · ${STAGE[stage].name} · ${prog==='all'?'공통':PLABEL[prog]}`); render(); return; }
+  if(d.libUse){ const x=SAVED.find(z=>z.id===+d.libUse), o=st.send; if(x){ o.body=x.body; o.tpl=x.stage; o.channel=x.channel; o.filter=STAGE[x.stage].f; o.saveStage=o.saveProg=null; toast('문구를 불러왔어요 · '+x.name); render(); } return; }
+  if(d.libDel){ const i=SAVED.findIndex(z=>z.id===+d.libDel); if(i>=0){ const n=SAVED[i].name; SAVED.splice(i,1); toast('삭제했어요 · '+n); render(); } return; }
+  if(d.histUse){ const h=HIST[+d.histUse], o=st.send; o.body=h.body; o.tpl=h.stage; o.channel=h.ch==='문자'?'sms':'mail'; o.filter=STAGE[h.stage].f; o.saveStage=o.saveProg=null; toast('이전에 보낸 문구를 불러왔어요'); render(); window.scrollTo(0,0); return; }
+  if(d.histSave){ const h=HIST[+d.histSave], p=S(h.s).p, name=`${PLABEL[p]} ${STAGE[h.stage].name} (${h.t.slice(0,5)})`;
+    if(!SAVED.some(x=>x.body===h.body&&x.stage===h.stage&&x.prog===p)) SAVED.push({id:++SAVED_SEQ,name,stage:h.stage,prog:p,channel:h.ch==='문자'?'sms':'mail',at:'2026-10-09',body:h.body});
+    toast('저장한 문구에 추가했어요 · '+name); render(); return; }
+  if('staffAdd' in d){
+    const em=document.getElementById('st-email').value.trim(), nm=document.getElementById('st-name').value.trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ toast('이메일 형식을 확인해 주세요'); return; }
+    if(STAFF.some(x=>x.active&&x.email===em)){ toast('이미 등록된 운영진이에요'); return; }
+    STAFF.push({email:em,name:nm||'운영진 '+STAFF.length,role:'member',added:'2026-10-09',active:true});
+    toast('추가했어요 · 운영 DB, 주민번호 파일, 백업 폴더에 공유했습니다'); render(); return; }
+  if(d.staffDel){ const x=STAFF.find(s=>s.email===d.staffDel); if(x){ x.active=false; toast(x.name+' 접속 권한과 파일 공유를 해제했어요'); render(); } return; }
+  if(d.go){ go(d.go); return; }
+  if(d.prog){ st.prog=d.prog; render(); return; }
+  if(d.sess){ st.sid=d.sess; go('sess'); return; }
+  if(d.who){ const [a,b]=d.who.split('|'); openWho(a,+b); return; }
+  if(d.tg){ const [sid,i,k]=d.tg.split('|'); const r=recs(sid)[+i]; r.f[k]=r.f[k]?0:1;
+    if(k==='ins'&&r.f.ins) toast('보험 가입 완료 · 이 사람의 주민번호가 삭제됩니다'); render(); return; }
+  if(d.todo!==undefined){ const x=todos()[+d.todo].go; if(x[0]==='sess'){ st.sid=x[1]; go('sess'); } else { const tp=x[4]||'pay'; st.send={sid:x[1],filter:x[2]||'all',channel:x[3]||'sms',tpl:tp}; go('send'); } return; }
+  if(d.act==='ins'){ const s=S(st.sid); toast(`${act(s.id).length}명 명단을 엑셀로 내려받았어요 (이름, 주민번호 · 샘플)`); return; }
+  if(d.goSend!==undefined){ const [sid,k]=d.goSend.split('|'); st.send={sid,filter:k==='sat'?'sat':'all',channel:'sms',tpl:k==='sat'?'sat':'pay'}; go('send'); return; }
+  if(d.ch){ st.send.channel=d.ch; render(); return; }
+  if(d.copy){ const o=st.send, T=targets(o.sid,o.filter);
+    if(d.copy==='msg') copy(document.getElementById('pv').textContent,'문구를 복사했어요');
+    else copy(T.map(r=>o.channel==='sms'?person(r.k).phone.replaceAll('-',''):person(r.k).email).join(','),`${T.length}건을 복사했어요. 알리고에 붙여넣으세요`); return; }
+  if(d.log){ const o=st.send, T=targets(o.sid,o.filter); HIST.unshift({t:'10/09 '+new Date().toTimeString().slice(0,5),s:o.sid,stage:o.tpl,n:T.length,ch:o.channel==='sms'?'문자':'메일',body:curBody()}); toast('발송 이력에 문구와 함께 기록했어요'); render(); return; }
+  if(d.sp){ st.satProg=d.sp; render(); return; }
+  if(d.toast){ toast(d.toast); return; }
+});
+document.addEventListener('change',e=>{
+  if(e.target.dataset && e.target.dataset.trans){
+    const [sid,i]=e.target.dataset.trans.split('|'), r=recs(sid)[+i], before=r.trans;
+    r.trans=+e.target.value;
+    toast(`${person(r.k).name}님 이동수단을 ${TRANS_S[before]} → ${TRANS_S[r.trans]}(으)로 변경했어요`);
+    render(); return;
+  }
+  const id=e.target.id; if(!id) return;
+  if(id==='sd-s'){ st.send.sid=e.target.value; st.send.saveProg=null; render(); }
+  if(id==='sd-f'){ st.send.filter=e.target.value; render(); }
+  if(id==='lib-stage'){ st.send.libStage=e.target.value; render(); }
+  if(id==='lib-prog'){ st.send.libProg=e.target.value; render(); }
+  if(id==='sv-stage'){ st.send.saveStage=e.target.value; }
+  if(id==='sv-prog'){ st.send.saveProg=e.target.value; }
+});
+document.addEventListener('input',e=>{
+  if(e.target.id==='msgbox'){ st.send.body=e.target.value; refreshPreview(); return; }
+  if(e.target.id==='sv-name'){ st.send.saveName=e.target.value; return; }
+  if(e.target.id==='q'){ st.q=e.target.value; const pos=e.target.selectionStart; render(); const q=document.getElementById('q'); q.focus(); q.setSelectionRange(pos,pos); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
+{ const h=location.hash.slice(1); if(['dash','sess','people','up','send','sat','priv','staff'].includes(h)) st.screen=h; }
+render();
+if(location.hash==='#who') openWho('w2',0);
+if(location.hash==='#edit') openWho('w2',0,true);
+</script>
+</body>
+</html>
