@@ -23,6 +23,8 @@ function runSelfTest() {
     var db = openDb_();
     var today = todayKst();
     var old = '2026-01-01 00:00:00';
+    // 복사본에는 이관한 실제 데이터가 이미 들어 있을 수 있어서, 시험 데이터를 넣기 전의 개수를 기준으로 증가분을 센다
+    var pre = { s: readTab_('Sessions').length, p: readTab_('People').length, e: readTab_('Enrollments').length };
 
     appendObjects_(db, SCHEMA, 'Sessions', [
       { session_id: 'w91', program_id: 'w', n: 91, start: '2026-01-05', end: '2026-01-07', fee: 50000, cap: 7, note: '시험(지난 회차)' },
@@ -41,8 +43,9 @@ function runSelfTest() {
 
     // 읽기
     var boot = getBootstrap();
-    check('getBootstrap: 회차 2, 사람 2, 참여 기록 3', boot.sessions.length === 2 && boot.people.length === 2 && boot.enrollments.length === 3,
-      boot.sessions.length + '/' + boot.people.length + '/' + boot.enrollments.length);
+    check('getBootstrap: 시험 데이터(회차 2, 사람 2, 참여 기록 3)가 기존 데이터에 더해져 보인다',
+      boot.sessions.length === pre.s + 2 && boot.people.length === pre.p + 2 && boot.enrollments.length === pre.e + 3,
+      boot.sessions.length + '/' + boot.people.length + '/' + boot.enrollments.length + ' (기준 ' + pre.s + '/' + pre.p + '/' + pre.e + ')');
     check('getBootstrap: 소유자는 운영진 목록을 받는다', Array.isArray(boot.staff) && boot.me.role === 'owner');
     check('getBootstrap: 주민번호 관련 열이 없다', JSON.stringify(boot).search(/rrn|주민/i) < 0);
 
