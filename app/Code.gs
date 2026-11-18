@@ -7,7 +7,7 @@
  * 어느 쪽이든 실패하면 데이터 없이 안내 화면만 보여 준다.
  */
 
-var APP_VERSION = '0.1.0 (0단계: 준비)';
+var APP_VERSION = '0.1.1 (0단계: 준비)';
 
 function doGet() {
   var email = currentEmail_();
