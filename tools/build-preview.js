@@ -100,7 +100,18 @@ const mock = `
     deleteSession: function () { return true; },
     previewLegacyImport: function () { return c(PREVIEW_RESULT); },
     commitLegacyImport: function () { return { backup: { name: '곁마을 운영 DB 백업 20261118_120000' }, counts: { sessions: 5, people: 33, enrollments: 34 } }; },
-    undoLegacyImport: function () { return { sessions: 5, people: 33, enrollments: 34 }; }
+    undoLegacyImport: function () { return { sessions: 5, people: 33, enrollments: 34 }; },
+    listStaff: function () {
+      var ok = function (k, l) { return { key: k, label: l, ok: true }; }, no = function (k, l) { return { key: k, label: l, ok: false }; };
+      return { targets: [{ key: 'db', label: '운영 DB' }, { key: 'rrn', label: '주민번호 파일' }], staff: [
+        { email: 'owner@example.com', name: '소유자', role: 'owner', active: true, shares: [ok('db', '운영 DB'), ok('rrn', '주민번호 파일')] },
+        { email: 'staff1@example.com', name: '운영진 1', role: 'member', active: true, shares: [ok('db', '운영 DB'), ok('rrn', '주민번호 파일')] },
+        { email: 'staff2@example.com', name: '운영진 2', role: 'member', active: true, shares: [ok('db', '운영 DB'), no('rrn', '주민번호 파일')] },
+        { email: 'old@example.com', name: '이전 운영진', role: 'member', active: false, shares: [] }] };
+    },
+    addStaff: function (email, name) { return { email: email, name: name, reactivated: false, shares: [{ key: 'db', label: '운영 DB', ok: true }, { key: 'rrn', label: '주민번호 파일', ok: true }] }; },
+    removeStaff: function (email) { return { email: email, shares: [{ key: 'db', label: '운영 DB', ok: true }, { key: 'rrn', label: '주민번호 파일', ok: true }] }; },
+    fixStaffSharing: function (email) { return { email: email, shares: [{ key: 'db', label: '운영 DB', ok: true }, { key: 'rrn', label: '주민번호 파일', ok: true }] }; }
   };
   function chain() {
     var ok = function () {}, bad = function () {};

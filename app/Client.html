@@ -14,6 +14,7 @@ var IC = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
   warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18.5v.01"/></svg>',
   car: '<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17h14M3 13l2-6h14l2 6v4H3z"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="16.5" cy="17" r="1.5"/></svg>',
@@ -29,7 +30,8 @@ var S = {
   modal: null,           // { title, html, yes, danger, need }
   pending: {},           // 저장 중인 참여 기록 (같은 행을 연달아 누를 때 충돌 방지)
   busy: false,
-  imp: null              // 이관 화면 상태
+  imp: null,             // 이관 화면 상태
+  staffList: null        // 운영진 관리 화면 데이터 (소유자 전용)
 };
 var X = { person: {}, session: {}, prog: {} };
 var MODAL_FN = null;
@@ -121,14 +123,14 @@ function render() {
   var root = document.getElementById('root'); if (!root) return;
   if (!S.boot) { root.innerHTML = '<div class="loading">불러오는 중…</div>'; return; }
   var y = window.scrollY;
-  var screens = { dash: dashHtml, sess: sessHtml, people: peopleHtml, sessions: sessionsHtml, imp: importHtml };
+  var screens = { dash: dashHtml, sess: sessHtml, people: peopleHtml, sessions: sessionsHtml, imp: importHtml, staff: staffHtml };
   root.innerHTML = '<div class="app">' + sideHtml() + '<main>' + (screens[S.screen] || dashHtml)() + '</main></div>' + overlayHtml();
   window.scrollTo(0, y);
 }
 
 function sideHtml() {
   var items = [['dash', '홈 대시보드', 'home'], ['sess', '회차 상세', 'cal'], ['people', '참여자', 'users'], ['sessions', '회차 관리', 'list']];
-  if (isOwner()) items.push(['imp', '기존 엑셀 이관', 'up']);
+  if (isOwner()) { items.push(['imp', '기존 엑셀 이관', 'up']); items.push(['staff', '운영진 관리', 'key']); }
   var me = S.boot.me;
   return '<aside class="side"><div class="brand"><div class="logo">곁</div><div><b>곁마을 운영</b><span>내부 운영진 전용</span></div></div>' +
     '<div class="nav-label">메뉴</div>' +
@@ -559,6 +561,85 @@ function undoImportConfirm() {
   });
 }
 
+/* ===================== 운영진 관리 (소유자 전용) ===================== */
+function loadStaff() {
+  S.staffList = null; render();
+  return api('listStaff').then(function (r) { S.staffList = r; render(); })
+    .catch(function (err) { S.staffList = { error: err.msg }; render(); });
+}
+
+function staffHtml() {
+  var head = '<div class="top"><div><h1>운영진 관리</h1><div class="sub">운영진이 바뀌면 여기에서 이메일을 추가하거나 삭제하세요. 접속 권한과 구글 드라이브 파일 공유가 함께 바뀝니다.</div></div><div class="sp"></div><span class="chip warn">소유자 전용 화면</span></div>';
+  if (!isOwner()) return head + '<div class="card"><div class="empty"><b>소유자만 볼 수 있는 화면이에요</b></div></div>';
+  var L = S.staffList;
+  if (!L) return head + '<div class="card"><div class="empty">불러오는 중…</div></div>';
+  if (L.error) return head + '<div class="card"><div class="empty"><b>불러오지 못했어요</b>' + esc(L.error) + '<div class="row"><button class="btn" data-act="staff-reload">다시 불러오기</button></div></div></div>';
+
+  var active = L.staff.filter(function (x) { return x.active; }), gone = L.staff.filter(function (x) { return !x.active; });
+  var rows = active.map(function (x) {
+    var isOwnerRow = x.role === 'owner', missing = x.shares.some(function (s) { return !s.ok; });
+    var chips = x.shares.map(function (s) { return '<span class="chip ' + (s.ok ? 'ok' : 'warn') + '">' + esc(s.label) + (s.ok ? ' ✓' : ' 공유 필요') + '</span>'; }).join(' ');
+    return '<tr><td class="nw"><div class="name"><div class="av">' + esc(String(x.name || '?').charAt(0)) + '</div><b>' + esc(x.name) + '</b></div></td>' +
+      '<td class="muted nw">' + esc(x.email) + '</td><td><span class="chip ' + (isOwnerRow ? 'pri' : '') + '">' + (isOwnerRow ? '소유자' : '운영진') + '</span></td>' +
+      '<td><div class="pill-row">' + chips + '</div></td><td class="nw" style="text-align:right">' +
+      (isOwnerRow ? '<span class="muted" style="font-size:12.5px">삭제 불가</span>'
+        : (missing ? '<button class="btn sm" data-act="staff-fix" data-email="' + esc(x.email) + '">다시 공유</button> ' : '') + '<button class="btn sm" data-act="staff-del" data-email="' + esc(x.email) + '">삭제</button>') + '</td></tr>';
+  }).join('');
+
+  return head + '<div class="card"><div class="card-h"><h2>현재 운영진</h2><span class="chip pri">' + active.length + '명</span></div>' +
+    '<div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>이름</th><th>구글 계정</th><th>역할</th><th>파일 공유 상태</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
+    '<div class="two" style="margin-top:16px"><div class="card card-b"><b>운영진 추가</b><div class="stack" style="margin-top:12px">' +
+    '<div><label class="f">이름</label><input type="text" id="st-name" placeholder="예: 운영진 2" style="width:100%"></div>' +
+    '<div><label class="f">구글 계정 이메일</label><input type="text" id="st-email" placeholder="name@gmail.com" style="width:100%"></div>' +
+    '<div><button class="btn pri" data-act="staff-add"' + (S.busy ? ' disabled' : '') + '>' + IC.check.replace('<svg', '<svg width="16" height="16"') + ' 추가하고 공유하기</button></div></div></div>' +
+    '<div class="stack"><div class="card card-b"><b>안내</b><div class="muted" style="margin-top:6px;line-height:1.8">· 추가하면 운영 DB와 주민번호 파일이 그 사람의 구글 계정에 <b>편집자</b>로 공유되고, 구글이 그 사람에게 "공유됨" 안내 메일을 보내요.<br>' +
+    '· 새 운영진은 처음 접속할 때 구글 권한 허용 창에서 한 번 승인해야 해요. (고급 → 이동 → 허용)<br>· 삭제하면 바로 접속이 막히고 파일 공유가 해제돼요. 그 사람이 남긴 수정 기록은 그대로 남아요.<br>' +
+    '· 구글폼 만족도 응답 시트는 3단계에서 폼을 연결하면 공유 대상에 자동으로 들어와요. 그때 각 운영진의 "다시 공유"를 누르면 돼요.<br>· 백업 폴더는 소유자만 쓰고 공유하지 않아요.</div></div>' +
+    (gone.length ? '<div class="card card-b"><b>삭제한 운영진</b><div class="muted" style="margin-top:6px">' + gone.map(function (x) { return esc(x.name) + ' · ' + esc(x.email); }).join('<br>') + '</div></div>' : '') +
+    '</div></div>';
+}
+
+/** 공유 결과를 알린다. 실패한 파일이 있으면 어느 파일인지 창으로 보여 준다. */
+function reportShares(prefix, shares) {
+  var bad = shares.filter(function (s) { return !s.ok; });
+  if (!bad.length) { toast(prefix + ' 파일 공유도 마쳤어요'); return; }
+  openModal({
+    title: '일부 파일 공유에 실패했어요',
+    html: '<p>' + esc(prefix) + ' 아래 파일은 공유하지 못했어요. 목록의 "다시 공유"로 다시 시도하거나, 구글 드라이브에서 직접 공유해 주세요.</p><ul style="margin:6px 0 0;padding-left:18px;color:var(--ink2)">' +
+      bad.map(function (s) { return '<li><b>' + esc(s.label) + '</b>: ' + esc(s.error || '알 수 없는 오류') + '</li>'; }).join('') + '</ul>',
+    yes: '확인'
+  }, function () {});
+}
+
+function addStaffUi() {
+  if (S.busy) return;
+  var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+  var email = v('st-email'), name = v('st-name');
+  S.busy = true; toast('추가하는 중이에요… (파일 공유에 몇 초 걸려요)');
+  api('addStaff', email, name).then(function (res) {
+    S.busy = false; return loadStaff().then(function () { reportShares((res.reactivated ? '다시 등록했어요.' : '추가했어요.'), res.shares); });
+  }).catch(function (err) { S.busy = false; render(); fail(err); });
+}
+function removeStaffConfirm(email) {
+  var x = ((S.staffList && S.staffList.staff) || []).filter(function (s) { return s.email === email; })[0];
+  openModal({
+    title: '운영진 삭제',
+    html: '<p><b>' + esc(x ? x.name : email) + '</b> (' + esc(email) + ')의 접속을 막고 파일 공유를 해제할까요?</p><p class="muted">그 사람이 남긴 수정 기록은 그대로 남아요. 나중에 다시 추가할 수 있어요.</p>',
+    yes: '삭제', danger: true
+  }, function () {
+    api('removeStaff', email).then(function (res) {
+      return loadStaff().then(function () {
+        var bad = res.shares.filter(function (s) { return !s.ok; });
+        if (bad.length) reportShares('삭제했어요. 다만', bad.map(function (s) { return { label: s.label, ok: false, error: s.error }; })); else toast('삭제하고 파일 공유를 해제했어요');
+      });
+    }).catch(fail);
+  });
+}
+function fixStaffUi(email) {
+  toast('공유하는 중이에요…');
+  api('fixStaffSharing', email).then(function (res) { return loadStaff().then(function () { reportShares('다시 공유했어요.', res.shares); }); }).catch(fail);
+}
+
 /* ===================== 확인 창 ===================== */
 function openModal(m, onYes) { S.modal = m; MODAL_FN = onYes; render(); }
 function closeModal() { S.modal = null; MODAL_FN = null; render(); }
@@ -576,7 +657,11 @@ document.addEventListener('click', function (ev) {
   var a = t.getAttribute('data-act'), d = t.dataset;
   if (a === 'none' || t.disabled) return;
   switch (a) {
-    case 'nav': S.screen = d.to; S.drawer = null; S.edit = false; if (d.to === 'imp' && !S.imp) S.imp = newImp(); window.scrollTo(0, 0); render(); break;
+    case 'nav': S.screen = d.to; S.drawer = null; S.edit = false; if (d.to === 'imp' && !S.imp) S.imp = newImp(); window.scrollTo(0, 0); if (d.to === 'staff') loadStaff(); else render(); break;
+    case 'staff-add': addStaffUi(); break;
+    case 'staff-del': removeStaffConfirm(d.email); break;
+    case 'staff-fix': fixStaffUi(d.email); break;
+    case 'staff-reload': loadStaff(); break;
     case 'prog': S.prog = d.id; render(); break;
     case 'sess': S.sid = d.sid; S.screen = 'sess'; window.scrollTo(0, 0); render(); break;
     case 'who': if (d.eid) openWho(d.eid); break;
@@ -629,6 +714,7 @@ document.addEventListener('keydown', function (ev) {
   var P = window.__PREVIEW;            // 로컬 미리보기(tools/build-preview.js)에서만 있는 값. 실제 앱에는 없다.
   if (P && P.screen) S.screen = P.screen;
   loadBoot().then(function () {
+    if (P && P.screen === 'staff') loadStaff();
     if (!P) return;
     if (P.sid) S.sid = P.sid;
     if (P.drawerIdx != null && S.boot.enrollments[P.drawerIdx]) { S.drawer = { eid: S.boot.enrollments[P.drawerIdx].enroll_id }; S.edit = !!P.edit; }

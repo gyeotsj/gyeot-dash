@@ -269,6 +269,34 @@ function plainRow(obj) {
   return out;
 }
 
+/* ---------- 운영진 관리 (F14) ---------- */
+
+/** 운영진 추가 입력 검사. 이메일은 소문자로 정리하고, 이름이 비어 있으면 이메일 앞부분을 쓴다. */
+function validateStaffInput(email, name) {
+  var e = normalizeEmail(email);
+  if (!EMAIL_PATTERN_.test(e) || e.length > 100) return { ok: false, error: '이메일 형식이 맞지 않아요.' };
+  var n = String(name == null ? '' : name).trim();
+  if (n.length > 40) return { ok: false, error: '이름은 40자까지만 쓸 수 있어요.' };
+  if (containsRrn(n)) return { ok: false, error: '주민번호로 보이는 값은 저장할 수 없어요.' };
+  return { ok: true, email: e, name: n || e.split('@')[0] };
+}
+
+/** 운영진 삭제 가능 여부. 목록에 없거나, 본인이거나, 소유자면 막는다. */
+function planStaffRemoval(rows, target, actor) {
+  var t = normalizeEmail(target), a = normalizeEmail(actor);
+  var row = rows.filter(function (r) { return normalizeEmail(r.email) === t && String(r.active).trim().toUpperCase() === 'Y'; })[0];
+  if (!row) return { ok: false, error: '운영진 목록에 없는 이메일이에요.' };
+  if (t === a) return { ok: false, error: '본인은 삭제할 수 없어요.' };
+  if (row.role === 'owner') return { ok: false, error: '소유자는 삭제할 수 없어요.' };
+  return { ok: true, row: row };
+}
+
+/** 이메일 목록에 이 이메일이 있는지 (대소문자·공백 무시) */
+function isEmailIn(list, email) {
+  var n = normalizeEmail(email);
+  return !!n && (list || []).some(function (x) { return normalizeEmail(x) === n; });
+}
+
 /** 검증 오류 목록({항목: 문구})에서 첫 번째를 "항목: 문구" 형태로 */
 function firstError(errors) {
   var k = Object.keys(errors || {})[0];

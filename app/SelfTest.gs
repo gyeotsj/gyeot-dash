@@ -162,6 +162,23 @@ function runSelfTest() {
     check('이관 되돌리기: 완료 표시가 해제된다', readConfig_().legacy_imported !== 'Y');
     expectError('이관 되돌리기: 이미 되돌렸으면 거부', 'INVALID', function () { undoLegacyImport(); });
 
+    // 운영진 관리 (시트 쪽만 시험한다. 드라이브 공유는 시험용 계정으로 직접 확인한다)
+    var me = currentEmail_();
+    var s0 = readTab_('Staff').length;
+    withLock_(function () { staffAddRow_('selftest.member@example.com', '시험 운영진', me); });
+    check('운영진 추가: Staff 탭에 활성 member로 등록된다',
+      readTab_('Staff').some(function (r) { return r.email === 'selftest.member@example.com' && r.active === 'Y' && r.role === 'member'; }) && readTab_('Staff').length === s0 + 1);
+    check('운영진 확인: 추가한 사람은 운영진으로 인식된다', !!findActiveStaff(readTab_('Staff'), 'SelfTest.Member@Example.com '));
+    expectError('운영진 추가: 이미 있는 사람은 중복', 'DUPLICATE', function () { withLock_(function () { staffAddRow_('selftest.member@example.com', '또', me); }); });
+    expectError('운영진 삭제: 소유자(본인)는 삭제 불가', 'INVALID', function () { withLock_(function () { staffRemoveRow_(me, me); }); });
+    expectError('운영진 삭제: 목록에 없는 사람은 거부', 'INVALID', function () { withLock_(function () { staffRemoveRow_('nobody@example.com', me); }); });
+    withLock_(function () { staffRemoveRow_('selftest.member@example.com', me); });
+    check('운영진 삭제: 비활성이 되어 접속이 막힌다(행은 남음)', !findActiveStaff(readTab_('Staff'), 'selftest.member@example.com') && readTab_('Staff').length === s0 + 1);
+    var re = withLock_(function () { return staffAddRow_('selftest.member@example.com', '시험 운영진(복귀)', me); });
+    check('운영진 다시 추가: 새 행을 만들지 않고 다시 활성이 된다', re.reactivated === true && readTab_('Staff').length === s0 + 1 && !!findActiveStaff(readTab_('Staff'), 'selftest.member@example.com'));
+    check('운영진 관리: 공유 대상에 운영 DB·주민번호 파일이 있다 (백업 폴더는 없다)',
+      sharingTargets_().map(function (t) { return t.key; }).slice(0, 2).join(',') === 'db,rrn' && sharingTargets_().every(function (t) { return t.key !== 'backup'; }));
+
     // 감사 기록
     var audits = readTab_('AuditLog');
     var detailText = JSON.stringify(audits);

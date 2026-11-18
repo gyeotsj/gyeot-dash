@@ -19,6 +19,7 @@ const L = get(`({
   rowsToObjects, objectToRow, validateHeader, schemaProblems, formatKst, makeId,
   todayKst, isValidDate, normalizePhone, validateValue, validatePatch, hasConflict, stepPatch,
   normalizeCancel, isDuplicatePerson, validateSession, plainRow, apiError, firstError, FIELD_LABELS,
+  validateStaffInput, planStaffRemoval, isEmailIn,
   parseSessionTitle, mapLegacyColumns, parseLegacySheet, legacyPhone, parseLegacyPay, legacyTransport, buildLegacyPlan, LEGACY_HEADERS, sanitizeLegacyRows,
   ENROLLMENT_EDITABLE, PERSON_EDITABLE, STEP_DEFS, SESSION_RULES,
   SCHEMA, RRN_SCHEMA, STAGES, PROGRAM_IDS, SEED_PROGRAMS, SEED_CONFIG, SEED_TEMPLATES, OWNER_EMAIL
@@ -566,6 +567,48 @@ test('다른 칸(메일 등)에 주민번호가 섞여 있어도 거부', () => 
   rows[3][4] = '9001011234567';
   assert.strictEqual(L.sanitizeLegacyRows(J(rows)).ok, false);
 });
+/* ===================== 1단계: 운영진 관리 ===================== */
+console.log('운영진 관리: 입력 검사');
+test('이메일을 소문자로 정리하고 이름이 없으면 이메일 앞부분을 쓴다', () => {
+  const r = L.validateStaffInput('  Kim.Staff@Gmail.com ', '');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.email, 'kim.staff@gmail.com');
+  assert.strictEqual(r.name, 'kim.staff');
+});
+test('이름이 있으면 앞뒤 공백을 지운 이름을 쓴다', () => {
+  assert.strictEqual(L.validateStaffInput('a@b.co', '  운영진 4 ').name, '운영진 4');
+});
+test('이메일 형식이 틀리거나 이름이 너무 길면 거부', () => {
+  ['', 'abc', 'a@b', 'a b@c.com', null].forEach(e => assert.strictEqual(L.validateStaffInput(e, 'x').ok, false, String(e)));
+  assert.strictEqual(L.validateStaffInput('a@b.co', 'ㄱ'.repeat(41)).ok, false);
+  assert.strictEqual(L.validateStaffInput('a@b.co', '900101-1234567').ok, false);
+});
+
+console.log('운영진 관리: 삭제 가능 여부');
+const staffRows = [
+  { email: 'Owner@Example.com', role: 'owner', active: 'Y' },
+  { email: 'a@example.com', role: 'member', active: 'Y' },
+  { email: 'gone@example.com', role: 'member', active: 'N' }];
+test('일반 운영진은 삭제할 수 있다 (대소문자 무시)', () => {
+  assert.strictEqual(L.planStaffRemoval(staffRows, ' A@Example.com ', 'owner@example.com').ok, true);
+});
+test('본인과 소유자는 삭제할 수 없다', () => {
+  assert.strictEqual(L.planStaffRemoval(staffRows, 'owner@example.com', 'owner@example.com').ok, false);
+  const other = L.planStaffRemoval(staffRows, 'owner@example.com', 'a@example.com');
+  assert.strictEqual(other.ok, false);
+  assert.ok(other.error.includes('소유자'));
+});
+test('목록에 없거나 이미 삭제된 사람은 거부', () => {
+  assert.strictEqual(L.planStaffRemoval(staffRows, 'x@example.com', 'owner@example.com').ok, false);
+  assert.strictEqual(L.planStaffRemoval(staffRows, 'gone@example.com', 'owner@example.com').ok, false);
+});
+test('공유 목록 확인은 대소문자와 공백을 무시한다', () => {
+  assert.strictEqual(L.isEmailIn(['A@Example.com', 'b@example.com'], ' a@example.com '), true);
+  assert.strictEqual(L.isEmailIn(['b@example.com'], 'a@example.com'), false);
+  assert.strictEqual(L.isEmailIn([], ''), false);
+  assert.strictEqual(L.isEmailIn(null, 'a@b.co'), false);
+});
+
 /* ===================== 1단계: 화면 계산(Logic.html) ===================== */
 const logicSrc = fs.readFileSync(path.join(appDir, 'Logic.html'), 'utf8').replace(/<\/?script>/g, '');
 const lctx = vm.createContext({ console });
