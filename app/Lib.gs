@@ -94,6 +94,13 @@ function schemaProblems(schema) {
   return problems;
 }
 
+/** HTML 특수문자를 무력화한다 (화면에 오류 문구 등을 넣을 때 사용) */
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 /** 한국 시간(KST, UTC+9) 기준 'yyyy-MM-dd HH:mm:ss' */
 function formatKst(d) {
   var t = new Date(d.getTime() + 9 * 3600 * 1000);

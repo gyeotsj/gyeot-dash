@@ -7,9 +7,29 @@
  * 어느 쪽이든 실패하면 데이터 없이 안내 화면만 보여 준다.
  */
 
-var APP_VERSION = '0.1.1 (0단계: 준비)';
+var APP_VERSION = '0.1.2 (0단계: 준비)';
 
+/**
+ * 진입점. 어떤 오류가 나도 날것의 오류 화면 대신 안내 화면을 보여 주고,
+ * 원인은 실행 기록(Apps Script 편집기 → 실행)에 남긴다.
+ */
 function doGet() {
+  try {
+    return route_();
+  } catch (err) {
+    console.error('doGet 실패: ' + (err && err.stack ? err.stack : err));
+    var msg = escapeHtml(String(err && err.message ? err.message : err).slice(0, 160));
+    return HtmlService.createHtmlOutput(
+      '<!DOCTYPE html><html lang="ko"><head><base target="_top"><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+      '<body style="font-family:sans-serif;max-width:460px;margin:15vh auto;padding:0 20px;text-align:center;color:#18211e">' +
+      '<h2>접속 중 오류가 발생했습니다</h2><p>잠시 뒤 다시 시도하고, 계속되면 소유자에게 알려 주세요.</p>' +
+      '<p style="color:#7a8782;font-size:12px;word-break:break-all">오류: ' + msg + '</p></body></html>'
+    ).setTitle('곁마을 운영 대시보드');
+  }
+}
+
+function route_() {
   var email = currentEmail_();
   if (!email) return page_('denied', { reason: 'login' });
 

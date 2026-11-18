@@ -15,7 +15,7 @@ vm.runInContext(src, ctx);
 const get = expr => vm.runInContext(expr, ctx);
 
 const L = get(`({
-  normalizeEmail, findActiveStaff, digitsOnly, looksLikeRrn, containsRrn,
+  normalizeEmail, findActiveStaff, digitsOnly, looksLikeRrn, containsRrn, escapeHtml,
   rowsToObjects, objectToRow, validateHeader, schemaProblems, formatKst, makeId,
   SCHEMA, RRN_SCHEMA, STAGES, PROGRAM_IDS, SEED_PROGRAMS, SEED_CONFIG, SEED_TEMPLATES, OWNER_EMAIL
 })`);
@@ -144,6 +144,12 @@ test('기본 설정값: 환불 3일, 보관 3년, 주민번호 3개월', () => {
 });
 test('소유자 이메일이 설정돼 있다', () => {
   assert.strictEqual(L.normalizeEmail(L.OWNER_EMAIL), 'gyeot.sj@gmail.com');
+});
+
+console.log('화면 문자열');
+test('HTML 특수문자를 무력화한다', () => {
+  assert.strictEqual(L.escapeHtml('<script>alert("x")</script> & \''), '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;');
+  assert.strictEqual(L.escapeHtml(null), '');
 });
 
 console.log('시간·ID');
