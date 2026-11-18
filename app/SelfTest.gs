@@ -102,11 +102,71 @@ function runSelfTest() {
     expectError('deleteSession: 참여 기록이 있는 회차는 삭제 불가', 'INVALID', function () { deleteSession('w91'); });
     check('deleteSession: 비어 있는 회차는 삭제 가능', deleteSession('w95') === true && readTab_('Sessions').every(function (s) { return s.session_id !== 'w95'; }));
 
+    // 기존 엑셀 이관 (가짜 데이터, 프로그램 g로 시험해서 실제 회차와 겹치지 않게 한다)
+    withLock_(function () { setConfigUnlocked_('legacy_imported', ''); setConfigUnlocked_('legacy_import_manifest', ''); });
+    var HEAD = ['', '신청자명', '주민번호', '연락처', '메일', '성별', '출생연도', '1차 안내메일', '자차', '고속', '시외', '참가비 이체', '최종 안내메일'];
+    var RR = function (name, phone, o) {
+      o = o || {};
+      return ['', name, '900101-1234567', phone, name + '@example.com', '여', 1995, 'ㅇ', o.car || '', o.exp || '', '', o.pay === undefined ? 'ㅇ' : o.pay, o.m2 === false ? '' : 'ㅇ'];
+    };
+    var fake = [
+      ['', '1회차 | 10/6(화)-8(목)'], HEAD,
+      RR('가나다', '010-1111-0001', { car: 'ㅇ' }), RR('나다라', '010-1111-0002', { pay: '', m2: false }),
+      RR('다라마', '010-1111-0003', { pay: 'ㅇ 25000원 환불' }), RR('라마바', '010-1111-0004', { pay: 'ㅇ 50000원 환불' }),
+      ['', '2회차 | 10/12(월)-14(수)'], HEAD, RR('가나다', '01011110001'), RR('바사아', '010-1111-0006')
+    ];
+    var legacyParsed = parseLegacySheet(fake);
+    check('이관: 엑셀을 읽은 결과에 주민번호가 없다', JSON.stringify(legacyParsed).indexOf('900101') < 0);
+    var payload = { parsed: legacyParsed, opts: { program_id: 'g', year: 2026, fee: 50000, cap: 7 } };
+    var base = { s: readTab_('Sessions').length, p: readTab_('People').length, e: readTab_('Enrollments').length };
+
+    var pv = previewLegacyImport(payload);
+    check('이관 미리보기: 오류 없음, 회차 2·사람 5·참여 6', pv.ok && pv.counts.sessions === 2 && pv.counts.people === 5 && pv.counts.enrollments === 6, JSON.stringify(pv.counts));
+    check('이관 미리보기: 저장하지 않는다', readTab_('Sessions').length === base.s && readTab_('Enrollments').length === base.e);
+    check('이관 미리보기: 이름·연락처를 돌려주지 않는다', !/가나다|나다라|다라마|라마바|바사아|010-1111/.test(JSON.stringify(pv)));
+    expectError('이관: 서버에 몰래 주민번호 모양이 오면 거부', 'INVALID', function () {
+      var bad = JSON.parse(JSON.stringify(payload)); bad.parsed.sessions[0].rows[0].email = '900101-1234567'; commitLegacyImport(bad);
+    });
+
+    var cm = commitLegacyImport(payload);
+    check('이관 실행: 회차 2·사람 5·참여 6이 저장된다',
+      readTab_('Sessions').length === base.s + 2 && readTab_('People').length === base.p + 5 && readTab_('Enrollments').length === base.e + 6,
+      readTab_('Sessions').length + '/' + readTab_('People').length + '/' + readTab_('Enrollments').length);
+    check('이관 실행: 백업 파일이 만들어진다', !!(cm.backup && cm.backup.id));
+    if (cm.backup && cm.backup.id) DriveApp.getFileById(cm.backup.id).setTrashed(true);
+    check('이관 실행: 완료 표시와 되돌리기 기록이 Config에 남는다', readConfig_().legacy_imported === 'Y' && !!readConfig_().legacy_import_manifest);
+    expectError('이관: 이미 이관했으면 거부', 'INVALID', function () { commitLegacyImport(payload); });
+
+    var impEnr = readTab_('Enrollments').filter(function (e) { return e.session_id === 'g1' || e.session_id === 'g2'; });
+    var cancelled = impEnr.filter(function (e) { return e.cancel_reason; });
+    check('이관 규칙: 취소 2건(입금 없음, 전액 환불)', cancelled.length === 2 && cancelled.map(function (e) { return e.cancel_reason; }).sort().join('|') === '입금 미확인(이관 시 취소 처리)|전액 환불(이관)',
+      cancelled.map(function (e) { return e.cancel_reason; }).join('|'));
+    var partial = impEnr.filter(function (e) { return e.refund_amount === 25000; })[0];
+    check('이관 규칙: 25,000원 환불은 참석·보험 완료·취소 아님', !!partial && partial.attend === '참석' && !partial.cancel_reason && partial.ins_at === today);
+    check('이관 규칙: 취소가 아닌 사람 입금액은 50,000원', impEnr.filter(function (e) { return !e.cancel_reason; }).every(function (e) { return e.pay_amount === 50000; }));
+    var impPeople = readTab_('People').filter(function (p) { return /^(가나다|나다라|다라마|라마바|바사아)$/.test(p.name); });
+    check('이관 규칙: 같은 사람은 한 명으로 합쳐진다(가나다는 2개 회차)',
+      impPeople.length === 5 && impEnr.filter(function (e) { return e.person_id === impPeople.filter(function (p) { return p.name === '가나다'; })[0].person_id; }).length === 2);
+    check('이관 규칙: 동의 항목은 미확인(빈칸)', impPeople.every(function (p) { return p.consent_retain === '' && p.consent_portrait === ''; }));
+    var firstActive = impEnr.filter(function (e) { return !e.cancel_reason; })[0];
+    check('이관한 기록도 일반 API로 수정된다(setStep)', setStep(firstActive.enroll_id, 'attend', '참석').attend === '참석');
+
+    // 이관 뒤에 새로 생긴 기록이 있으면 되돌리지 못한다
+    withLock_(function () { appendObjects_(openDb_(), SCHEMA, 'Enrollments', [{ enroll_id: 'e_extra', session_id: 'g1', person_id: 'p_a', pass: '합격', updated_at: old, updated_by: 'seed' }]); });
+    expectError('이관 되돌리기: 이관 뒤 추가된 참여 기록이 있으면 거부', 'INVALID', function () { undoLegacyImport(); });
+    withLock_(function () { deleteRowsByKeysUnlocked_('Enrollments', ['e_extra']); });
+    var undone = undoLegacyImport();
+    check('이관 되돌리기: 이관분만 지운다(회차 2·사람 5·참여 6)', undone.sessions === 2 && undone.people === 5 && undone.enrollments === 6, JSON.stringify(undone));
+    check('이관 되돌리기: 이관 전 상태로 돌아간다', readTab_('Sessions').length === base.s && readTab_('People').length === base.p && readTab_('Enrollments').length === base.e);
+    check('이관 되돌리기: 완료 표시가 해제된다', readConfig_().legacy_imported !== 'Y');
+    expectError('이관 되돌리기: 이미 되돌렸으면 거부', 'INVALID', function () { undoLegacyImport(); });
+
     // 감사 기록
     var audits = readTab_('AuditLog');
     var detailText = JSON.stringify(audits);
     check('감사 기록이 남는다', audits.length >= 10, String(audits.length));
-    check('감사 기록에 개인정보 값(이름, 연락처, 메모)이 없다', !/시험가|시험나|010-0000|알레르기|디자이너/.test(detailText));
+    check('감사 기록에 개인정보 값(이름, 연락처, 메모)이 없다', !/시험가|시험나|010-0000|알레르기|디자이너|가나다|나다라|다라마|라마바|바사아|010-1111/.test(detailText));
+    check('감사 기록에 이관 실행·되돌리기가 남는다', /legacy_import/.test(detailText) && /legacy_undo/.test(detailText));
 
     // 백업 (복사본의 AuditLog에만 기록됨)
     var bk = backupNow();

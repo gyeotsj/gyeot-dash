@@ -280,3 +280,239 @@ function firstError(errors) {
 function apiError(code, message) {
   return new Error('[' + code + '] ' + message);
 }
+
+/* ================= 기존 엑셀 이관 (F8) =================
+ * 브라우저가 엑셀을 읽어 parseLegacySheet 로 정리하고, 서버는 buildLegacyPlan 으로 규칙을 적용한다.
+ * 규칙의 정본은 PRD.md "기존 엑셀 이관 규칙". 주민번호 열은 읽지 않으며 결과에도 담기지 않는다.
+ */
+
+/**
+ * 화면에서 온 이관 데이터를 정리한다. 허용된 항목만 남기고 길이를 자른다.
+ * (화면이 몰래 넣은 열, 예를 들어 주민번호가 있어도 여기서 버려진다.)
+ * 반환: { ok, error, parsed }
+ */
+function sanitizeLegacyParsed(parsed) {
+  var cut = function (v, n) { return String(v == null ? '' : v).slice(0, n); };
+  if (!parsed || !Array.isArray(parsed.sessions)) return { ok: false, error: '이관 데이터 형식이 맞지 않아요.' };
+  if (parsed.sessions.length > 20) return { ok: false, error: '회차가 너무 많아요 (최대 20개).' };
+  var total = 0, sessions = [];
+  for (var i = 0; i < parsed.sessions.length; i++) {
+    var s = parsed.sessions[i];
+    if (!s || !Array.isArray(s.rows)) return { ok: false, error: '이관 데이터 형식이 맞지 않아요.' };
+    total += s.rows.length;
+    if (total > 500) return { ok: false, error: '행이 너무 많아요 (최대 500행).' };
+    sessions.push({
+      title: cut(s.title, 100), rowNo: +s.rowNo || 0,
+      missing: Array.isArray(s.missing) ? s.missing.slice(0, 20).map(function (x) { return cut(x, 30); }) : [],
+      rows: s.rows.map(function (r) {
+        r = r || {};
+        return {
+          rowNo: +r.rowNo || 0, name: cut(r.name, 60), phone: cut(r.phone, 30), email: cut(r.email, 100),
+          gender: cut(r.gender, 4), birth: cut(r.birth, 10),
+          m1: !!r.m1, car: !!r.car, exp: !!r.exp, int: !!r.int, pay: cut(r.pay, 60), m2: !!r.m2
+        };
+      })
+    });
+  }
+  var warnings = (Array.isArray(parsed.warnings) ? parsed.warnings : []).slice(0, 100).map(function (w) {
+    w = w || {};
+    return { code: cut(w.code, 20), rowNo: +w.rowNo || 0, msg: cut(w.msg, 200) };
+  });
+  return { ok: true, parsed: { sessions: sessions, warnings: warnings } };
+}
+
+/** 엑셀 헤더 이름. 주민번호('주민번호') 열은 일부러 목록에 넣지 않는다. */
+var LEGACY_HEADERS = {
+  name: '신청자명', phone: '연락처', email: '메일', gender: '성별', birth: '출생연도',
+  m1: '1차 안내메일', car: '자차', exp: '고속', int: '시외', pay: '참가비 이체', m2: '최종 안내메일'
+};
+
+/** 회차 제목 "3회차 | 10/19(월)-21(수)" 또는 "7회차 | 10/30(금)-11/1(일)" → { n, start, end } (날짜는 yyyy-MM-dd). 못 읽으면 null */
+function parseSessionTitle(text, year) {
+  var m = /(\d+)\s*회차\s*\|\s*(\d{1,2})\/(\d{1,2})\s*(?:\([^)]*\))?\s*[-~–]\s*(?:(\d{1,2})\/)?(\d{1,2})/.exec(String(text == null ? '' : text));
+  if (!m) return null;
+  var p2 = function (n) { return String(n).padStart(2, '0'); };
+  var sm = +m[2], sd = +m[3], em = m[4] ? +m[4] : sm, ed = +m[5];
+  var start = year + '-' + p2(sm) + '-' + p2(sd), end = year + '-' + p2(em) + '-' + p2(ed);
+  if (!isValidDate(start) || !isValidDate(end) || start > end) return null;
+  return { n: +m[1], start: start, end: end };
+}
+
+/** 헤더 행에서 각 항목의 열 번호를 찾는다. 빠진 항목은 missing 에 모은다. (주민번호 열은 찾지 않는다) */
+function mapLegacyColumns(texts) {
+  var cols = {}, missing = [];
+  Object.keys(LEGACY_HEADERS).forEach(function (k) {
+    var idx = texts.indexOf(LEGACY_HEADERS[k]);
+    if (idx < 0) missing.push(LEGACY_HEADERS[k]); else cols[k] = idx;
+  });
+  cols.missing = missing;
+  return cols;
+}
+
+/**
+ * 엑셀 첫 시트(2차원 배열)를 회차별 행으로 정리한다. 결과에는 개인정보 중 이름·연락처·메일·성별·출생연도만 있고
+ * 주민번호는 없다. 경고는 개인정보를 담지 않고 "표의 몇 행"처럼 위치만 알려 준다.
+ * 반환: { sessions: [{ title, rowNo, missing, rows: [...] }], warnings: [{ code, rowNo, msg }] }
+ */
+function parseLegacySheet(rows) {
+  var out = { sessions: [], warnings: [] };
+  var cur = null, cols = null;
+  var str = function (v) { return v == null ? '' : String(v).trim(); };
+  var TITLE = /^\s*\d+\s*회차\s*\|/;
+
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i] || [];
+    var texts = row.map(str);
+    var any = texts.some(function (t) { return t !== ''; });
+
+    var tIdx = -1;
+    for (var j = 0; j < texts.length; j++) { if (TITLE.test(texts[j])) { tIdx = j; break; } }
+    if (tIdx >= 0) { cur = { title: texts[tIdx], rowNo: i + 1, missing: [], rows: [] }; out.sessions.push(cur); cols = null; continue; }
+
+    if (texts.indexOf('신청자명') >= 0) {
+      cols = mapLegacyColumns(texts);
+      if (!cur) { cur = { title: '', rowNo: i + 1, missing: [], rows: [] }; out.sessions.push(cur); }
+      cur.missing = cols.missing;
+      continue;
+    }
+
+    if (!cur || !cols || cols.missing.length) {
+      if (any) out.warnings.push({ code: 'STRAY', rowNo: i + 1, msg: '표 밖에 값이 있어 건너뛰었어요 (' + (i + 1) + '행)' });
+      continue;
+    }
+    var name = str(row[cols.name]);
+    if (!name) {
+      if (any) out.warnings.push({ code: 'NO_NAME', rowNo: i + 1, msg: '이름이 없는 행에 값이 있어 건너뛰었어요 (' + (i + 1) + '행)' });
+      continue;
+    }
+    cur.rows.push({
+      rowNo: i + 1, name: name,
+      phone: str(row[cols.phone]), email: str(row[cols.email]), gender: str(row[cols.gender]), birth: str(row[cols.birth]),
+      m1: str(row[cols.m1]) !== '', car: str(row[cols.car]) !== '', exp: str(row[cols.exp]) !== '', int: str(row[cols.int]) !== '',
+      pay: str(row[cols.pay]), m2: str(row[cols.m2]) !== ''
+    });
+  }
+  return out;
+}
+
+/** 이관용 전화번호: 엑셀이 앞자리 0을 지운 경우(10자리 10으로 시작)를 되살린 뒤 010-1234-5678 형태로. 못 읽으면 null */
+function legacyPhone(raw) {
+  var d = digitsOnly(raw);
+  if (d.length === 10 && d.indexOf('10') === 0) d = '0' + d;
+  return normalizePhone(d);
+}
+
+/** 입금 칸 해석: '' → 미입금, 'ㅇ' → 입금, 'ㅇ 25000원 환불' → 입금 + 환불 25000 */
+function parseLegacyPay(text) {
+  var t = String(text == null ? '' : text).trim();
+  if (!t) return { paid: false, refund: 0 };
+  var m = /(\d[\d,]*)\s*원[^\d]*환불|환불[^\d]*(\d[\d,]*)\s*원/.exec(t);
+  var refund = m ? parseInt((m[1] || m[2]).replace(/,/g, ''), 10) : 0;
+  return { paid: true, refund: refund };
+}
+
+/** 자차/고속/시외 표시 → 이동수단. 하나만 표시돼 있으면 변환, 없거나 둘 이상이면 빈칸 */
+function legacyTransport(car, exp, int) {
+  var picked = [];
+  if (car) picked.push('자차'); if (exp) picked.push('고속터미널'); if (int) picked.push('시외터미널');
+  return { value: picked.length === 1 ? picked[0] : '', count: picked.length };
+}
+
+/**
+ * 정리된 엑셀(parsed)에 PRD의 이관 규칙을 적용해 만들 행을 계산한다. 저장하지는 않는다.
+ * opts: { program_id, year, fee, cap, today, now, makeId }
+ * 반환: { ok, errors, warnings, sessions, people, enrollments, summary }
+ *  - errors 가 있으면 이관하면 안 된다 (ok=false). warnings 는 알려 주기만 한다. 둘 다 개인정보를 담지 않는다.
+ */
+function buildLegacyPlan(parsed, opts) {
+  var errors = [], warnings = (parsed.warnings || []).map(function (w) { return w.msg; });
+  var sessions = [], people = [], enrollments = [], summary = [];
+  var peopleByKey = {}, seenSession = {};
+  var fee = opts.fee, today = opts.today, now = opts.now;
+  var idGen = opts.makeId || makeId;
+
+  if (containsRrn(parsed.sessions)) errors.push('주민번호 모양의 값이 입력에 들어 있어요. 이관을 중단했어요.');
+  if (!parsed.sessions || !parsed.sessions.length) errors.push('회차를 찾지 못했어요. 엑셀의 "N회차 | 날짜" 제목 행을 확인해 주세요.');
+
+  (parsed.sessions || []).forEach(function (ps) {
+    var label = ps.title || ('표의 ' + ps.rowNo + '행');
+    var t = parseSessionTitle(ps.title, opts.year);
+    if (!t) { errors.push('회차 제목을 읽지 못했어요: ' + label); return; }
+    if (ps.missing && ps.missing.length) { errors.push(t.n + '회차 헤더에 없는 열: ' + ps.missing.join(', ')); return; }
+    var sid = opts.program_id + t.n;
+    if (seenSession[sid]) { errors.push(t.n + '회차가 엑셀에 두 번 나와요'); return; }
+    seenSession[sid] = true;
+    sessions.push({ session_id: sid, program_id: opts.program_id, n: t.n, start: t.start, end: t.end, fee: fee, cap: opts.cap, note: '기존 엑셀 이관' });
+
+    var sum = { session_id: sid, total: 0, cancelled: 0, active: 0, paid: 0, m1: 0, m2: 0, ins: 0, attend: 0, refunded: 0, car: 0, exp: 0, int: 0, blankTransport: 0 };
+    var seenInSession = {};
+
+    ps.rows.forEach(function (r) {
+      var where = t.n + '회차 표의 ' + r.rowNo + '행';
+      var rawName = r.name, name = rawName, paren = '';
+      var pm = /^([^()]+?)\s*\((.*)\)\s*$/.exec(rawName);
+      if (pm) { name = pm[1].trim(); paren = pm[2].trim(); warnings.push(where + ': 이름 칸에 괄호가 있어 앞부분만 이름으로 쓰고 괄호 안 내용은 남긴 말에 보관했어요'); }
+      var nv = validateValue(PERSON_EDITABLE.name, name);
+      if (!nv.ok) { errors.push(where + ': 이름 ' + nv.error); return; }
+      name = nv.value;
+
+      var phone = legacyPhone(r.phone);
+      if (!phone) { errors.push(where + ': 연락처를 읽지 못했어요'); return; }
+
+      var key = name + '|' + digitsOnly(phone);
+      if (seenInSession[key]) { warnings.push(where + ': 같은 회차에 같은 사람이 또 있어 건너뛰었어요'); return; }
+      seenInSession[key] = true;
+
+      var person = peopleByKey[key];
+      if (!person) {
+        var gender = (r.gender === '남' || r.gender === '여') ? r.gender : '';
+        if (!gender) warnings.push(where + ': 성별을 읽지 못해 비워 뒀어요');
+        var by = parseInt(String(r.birth).replace(/\D/g, ''), 10);
+        var birth = (by >= 1900 && by <= opts.year) ? by : '';
+        if (birth === '') warnings.push(where + ': 출생연도를 읽지 못해 비워 뒀어요');
+        var ev = validateValue(PERSON_EDITABLE.email, r.email);
+        if (!ev.ok) warnings.push(where + ': 이메일 형식이 맞지 않아 비워 뒀어요');
+        person = {
+          person_id: idGen('p_'), name: name, phone: phone, email: ev.ok ? ev.value : '', gender: gender, birth_year: birth,
+          job: '', area: '', consent_retain: '', consent_portrait: '', created_at: now, updated_at: now
+        };
+        peopleByKey[key] = person;
+        people.push(person);
+      }
+
+      var pay = parseLegacyPay(r.pay);
+      var tr = legacyTransport(r.car, r.exp, r.int);
+      if (tr.count > 1) warnings.push(where + ': 이동수단이 둘 이상 표시돼 있어 비워 뒀어요');
+
+      var e = {
+        enroll_id: idGen('e_'), session_id: sid, person_id: person.person_id, hp_no: '', applied_at: '', pass: '합격', notice_ack: '',
+        memo: paren ? '[이관] 이름 칸의 괄호 내용: ' + paren : '', transport: tr.value,
+        m1_at: r.m1 ? today : '', pay_at: pay.paid ? today : '', pay_amount: pay.paid ? fee : '', refund_amount: pay.refund || '',
+        ins_at: '', m2_at: r.m2 ? today : '', attend: '', cancel_reason: '', cancelled_at: '', updated_at: now, updated_by: 'legacy-import'
+      };
+      if (!pay.paid) {
+        e.cancel_reason = '입금 미확인(이관 시 취소 처리)'; e.cancelled_at = today;
+      } else if (pay.refund >= fee && fee > 0) {
+        e.cancel_reason = '전액 환불(이관)'; e.cancelled_at = today;
+      } else if (pay.refund > 0) {
+        e.attend = '참석';                       // 참석 후 부분 환불
+      }
+      if (!e.cancel_reason) e.ins_at = today;    // 취소가 아닌 참여자는 보험 가입 완료로 기록
+      enrollments.push(e);
+
+      sum.total++;
+      if (e.cancel_reason) { sum.cancelled++; return; }
+      sum.active++;
+      if (e.pay_at) sum.paid++;
+      if (e.m1_at) sum.m1++;
+      if (e.m2_at) sum.m2++;
+      if (e.ins_at) sum.ins++;
+      if (e.attend === '참석') sum.attend++;
+      if (pay.refund > 0) sum.refunded++;
+      if (e.transport === '자차') sum.car++; else if (e.transport === '고속터미널') sum.exp++; else if (e.transport === '시외터미널') sum.int++; else sum.blankTransport++;
+    });
+    summary.push(sum);
+  });
+
+  return { ok: errors.length === 0, errors: errors, warnings: warnings, sessions: sessions, people: people, enrollments: enrollments, summary: summary };
+}

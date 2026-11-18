@@ -19,6 +19,7 @@ const L = get(`({
   rowsToObjects, objectToRow, validateHeader, schemaProblems, formatKst, makeId,
   todayKst, isValidDate, normalizePhone, validateValue, validatePatch, hasConflict, stepPatch,
   normalizeCancel, isDuplicatePerson, validateSession, plainRow, apiError, firstError, FIELD_LABELS,
+  parseSessionTitle, mapLegacyColumns, parseLegacySheet, legacyPhone, parseLegacyPay, legacyTransport, buildLegacyPlan, LEGACY_HEADERS, sanitizeLegacyParsed,
   ENROLLMENT_EDITABLE, PERSON_EDITABLE, STEP_DEFS, SESSION_RULES,
   SCHEMA, RRN_SCHEMA, STAGES, PROGRAM_IDS, SEED_PROGRAMS, SEED_CONFIG, SEED_TEMPLATES, OWNER_EMAIL
 })`);
@@ -349,6 +350,226 @@ test('수정 가능한 열에 updated_by·키·완료일이 없다', () => {
     assert.ok(!(k in L.ENROLLMENT_EDITABLE), k);
   });
   ['person_id', 'created_at', 'updated_at', 'gender', 'birth_year'].forEach(k => assert.ok(!(k in L.PERSON_EDITABLE), k));
+});
+
+/* ===================== 1단계: 기존 엑셀 이관 ===================== */
+console.log('이관: 회차 제목·칸 해석');
+test('회차 제목에서 번호와 날짜를 읽는다', () => {
+  assert.deepStrictEqual(J(L.parseSessionTitle('1회차 | 10/6(화)-8(목)', 2026)), { n: 1, start: '2026-10-06', end: '2026-10-08' });
+  assert.deepStrictEqual(J(L.parseSessionTitle('4회차 | 10/22(목)-24(토)', 2026)), { n: 4, start: '2026-10-22', end: '2026-10-24' });
+});
+test('달이 넘어가는 회차도 읽는다', () => {
+  assert.deepStrictEqual(J(L.parseSessionTitle('7회차 | 10/30(금)-11/1(일)', 2026)), { n: 7, start: '2026-10-30', end: '2026-11-01' });
+});
+test('못 읽는 제목은 null', () => {
+  ['일해보기', '3회차', '3회차 | 날짜 미정', '1회차 | 13/40(월)-41(화)', '', null].forEach(s => assert.strictEqual(L.parseSessionTitle(s, 2026), null, String(s)));
+});
+test('입금 칸 해석', () => {
+  assert.deepStrictEqual(J(L.parseLegacyPay('')), { paid: false, refund: 0 });
+  assert.deepStrictEqual(J(L.parseLegacyPay('ㅇ')), { paid: true, refund: 0 });
+  assert.deepStrictEqual(J(L.parseLegacyPay('ㅇ 25000원 환불')), { paid: true, refund: 25000 });
+  assert.deepStrictEqual(J(L.parseLegacyPay('ㅇ 50,000원 환불')), { paid: true, refund: 50000 });
+  assert.deepStrictEqual(J(L.parseLegacyPay('ㅇ 환불 25000원')), { paid: true, refund: 25000 });
+});
+test('이동수단: 하나만 표시되면 변환, 없거나 둘 이상이면 빈칸', () => {
+  assert.strictEqual(L.legacyTransport(true, false, false).value, '자차');
+  assert.strictEqual(L.legacyTransport(false, true, false).value, '고속터미널');
+  assert.strictEqual(L.legacyTransport(false, false, true).value, '시외터미널');
+  assert.strictEqual(L.legacyTransport(false, false, false).value, '');
+  assert.strictEqual(L.legacyTransport(true, true, false).value, '');
+  assert.strictEqual(L.legacyTransport(true, true, false).count, 2);
+});
+test('엑셀이 앞자리 0을 지운 전화번호도 되살린다', () => {
+  assert.strictEqual(L.legacyPhone('010-1234-5678'), '010-1234-5678');
+  assert.strictEqual(L.legacyPhone(1012345678), '010-1234-5678');
+  assert.strictEqual(L.legacyPhone('01012345678'), '010-1234-5678');
+  assert.strictEqual(L.legacyPhone('abc'), null);
+});
+
+/* 실제 엑셀과 같은 모양의 가짜 시트 (A열은 비어 있고 B열부터 시작. 주민번호는 가짜 값) */
+const HEAD = ['', '신청자명', '주민번호', '연락처', '메일', '성별', '출생연도', '1차 안내메일', '자차', '고속', '시외', '참가비 이체', '최종 안내메일'];
+const FAKE_RRN = '900101-1234567';
+const R = (name, phone, o = {}) => ['', name, FAKE_RRN, phone, o.mail || (name + '@example.com'), o.g || '여', o.b || 1995, o.m1 === false ? '' : 'ㅇ', o.car || '', o.exp || '', o.int || '', o.pay === undefined ? 'ㅇ' : o.pay, o.m2 === false ? '' : 'ㅇ'];
+const fakeSheet = () => [
+  ['', '', '', '', '', '', '', '', '메모'],                                  // 표 밖의 값
+  ['', '1회차 | 10/6(화)-8(목)'],
+  HEAD,
+  R('가나다', '010-1111-0001', { car: 'ㅇ' }),                                // 참여, 자차
+  R('나다라', '010-1111-0002', { pay: '', m2: false, exp: 'ㅇ' }),             // 입금 없음 → 취소
+  R('다라마', '010-1111-0003', { pay: 'ㅇ 25000원 환불', int: 'ㅇ' }),         // 부분 환불 → 참석
+  R('라마바', '010-1111-0004', { pay: 'ㅇ 50000원 환불', exp: 'ㅇ' }),         // 전액 환불 → 취소
+  R('마바사(마바아)', '010-1111-0005', {}),                                    // 괄호 이름, 이동수단 없음
+  ['', '', '', '', 'x@example.com', '', 1990],                                // 이름 없는 행
+  ['', '2회차 | 10/12(월)-14(수)'],
+  HEAD,
+  R('가나다', '01011110001', { g: '남', car: 'ㅇ', exp: 'ㅇ' }),               // 1회차와 같은 사람, 이동수단 둘 이상
+  R('바사아', '1011110006', { b: 2001 })                                      // 앞자리 0이 지워진 전화번호
+];
+const OPTS = { program_id: 'w', year: 2026, fee: 50000, cap: 7, today: '2026-11-18', now: '2026-11-18 12:00:00' };
+let seq = 0;
+const plan = () => { seq = 0; return L.buildLegacyPlan(L.parseLegacySheet(fakeSheet()), Object.assign({ makeId: p => p + (++seq) }, OPTS)); };
+
+console.log('이관: 시트 읽기');
+test('회차 2개와 행을 읽는다 (이름 없는 행 제외)', () => {
+  const p = L.parseLegacySheet(fakeSheet());
+  assert.strictEqual(p.sessions.length, 2);
+  assert.strictEqual(p.sessions[0].rows.length, 5);
+  assert.strictEqual(p.sessions[1].rows.length, 2);
+});
+test('표 밖의 값과 이름 없는 행은 경고만 하고 건너뛴다 (개인정보 없이 위치만)', () => {
+  const p = L.parseLegacySheet(fakeSheet());
+  assert.deepStrictEqual(Array.from(p.warnings, w => w.code).sort(), ['NO_NAME', 'STRAY']);
+  assert.ok(p.warnings.every(w => /\d+행/.test(w.msg)));
+});
+test('★ 주민번호는 읽은 결과 어디에도 없다', () => {
+  const s = JSON.stringify(L.parseLegacySheet(fakeSheet()));
+  assert.ok(!s.includes('900101'), '가짜 주민번호가 결과에 있음');
+  assert.ok(!/rrn|주민/i.test(s));
+});
+test('헤더에 열이 빠지면 그 회차는 읽지 않고 알려 준다', () => {
+  const rows = [['', '1회차 | 10/6(화)-8(목)'], ['', '신청자명', '주민번호', '연락처'], ['', '가나다', FAKE_RRN, '010-1111-0001']];
+  const p = L.parseLegacySheet(rows);
+  assert.ok(p.sessions[0].missing.length > 0);
+  assert.strictEqual(p.sessions[0].rows.length, 0);
+  assert.strictEqual(L.buildLegacyPlan(p, OPTS).ok, false);
+});
+
+console.log('이관: 규칙 적용');
+test('회차: 일해보기 2026, 참가비 50,000원, 정원 7명', () => {
+  const pl = plan();
+  assert.deepStrictEqual(Array.from(pl.sessions, s => s.session_id), ['w1', 'w2']);
+  assert.deepStrictEqual(J(pl.sessions[0]), { session_id: 'w1', program_id: 'w', n: 1, start: '2026-10-06', end: '2026-10-08', fee: 50000, cap: 7, note: '기존 엑셀 이관' });
+});
+test('같은 사람(이름+전화번호)은 한 명으로 합치고 참여 기록만 늘린다', () => {
+  const pl = plan();
+  assert.strictEqual(pl.people.length, 6);          // 7행 중 1명 중복
+  assert.strictEqual(pl.enrollments.length, 7);
+  const pid = pl.people.find(p => p.name === '가나다').person_id;
+  assert.strictEqual(pl.enrollments.filter(e => e.person_id === pid).length, 2);
+});
+test('입금 없는 사람은 취소 처리 (사유·취소일, 보험 없음)', () => {
+  const e = plan().enrollments[1];
+  assert.strictEqual(e.cancel_reason, '입금 미확인(이관 시 취소 처리)');
+  assert.strictEqual(e.cancelled_at, '2026-11-18');
+  assert.strictEqual(e.pay_at, '');
+  assert.strictEqual(e.ins_at, '');
+});
+test('50,000원 환불은 취소 처리 (입금·환불액 기록)', () => {
+  const e = plan().enrollments[3];
+  assert.strictEqual(e.cancel_reason, '전액 환불(이관)');
+  assert.strictEqual(e.pay_at, '2026-11-18');
+  assert.strictEqual(e.pay_amount, 50000);
+  assert.strictEqual(e.refund_amount, 50000);
+  assert.strictEqual(e.ins_at, '');
+});
+test('25,000원 환불은 참석 후 부분 환불 (취소 아님, 참석, 보험 완료)', () => {
+  const e = plan().enrollments[2];
+  assert.strictEqual(e.cancel_reason, '');
+  assert.strictEqual(e.attend, '참석');
+  assert.strictEqual(e.refund_amount, 25000);
+  assert.strictEqual(e.ins_at, '2026-11-18');
+});
+test('일반 참여자: 입금액 50,000원, 안내·보험 완료, 참석은 빈칸, 완료일은 이관일', () => {
+  const e = plan().enrollments[0];
+  assert.strictEqual(e.pay_amount, 50000);
+  assert.deepStrictEqual([e.m1_at, e.pay_at, e.m2_at, e.ins_at], ['2026-11-18', '2026-11-18', '2026-11-18', '2026-11-18']);
+  assert.strictEqual(e.attend, '');
+  assert.strictEqual(e.pass, '합격');
+  assert.strictEqual(e.transport, '자차');
+  assert.strictEqual(e.updated_by, 'legacy-import');
+});
+test('이동수단: 표시 없으면 빈칸, 둘 이상이면 빈칸+경고', () => {
+  const pl = plan();
+  assert.strictEqual(pl.enrollments[4].transport, '');
+  assert.strictEqual(pl.enrollments[5].transport, '');
+  assert.ok(pl.warnings.some(w => w.includes('이동수단이 둘 이상')));
+});
+test('동의 항목은 미확인(빈칸), 직업·거주지도 빈칸', () => {
+  const p = plan().people[0];
+  assert.strictEqual(p.consent_retain, '');
+  assert.strictEqual(p.consent_portrait, '');
+  assert.strictEqual(p.job, '');
+});
+test('괄호가 있는 이름은 앞부분만 이름으로, 괄호 내용은 남긴 말에 보관하고 경고', () => {
+  const pl = plan();
+  assert.ok(pl.people.some(p => p.name === '마바사'));
+  assert.ok(!pl.people.some(p => p.name.includes('(')));
+  assert.ok(pl.enrollments[4].memo.includes('마바아'));
+  assert.ok(pl.warnings.some(w => w.includes('괄호')));
+});
+test('앞자리 0이 지워진 전화번호를 되살린다', () => {
+  assert.strictEqual(plan().people.find(p => p.name === '바사아').phone, '010-1111-0006');
+});
+test('요약: 취소를 뺀 참여 기준으로 센다', () => {
+  const s = plan().summary[0];
+  assert.deepStrictEqual(
+    [s.total, s.cancelled, s.active, s.paid, s.m1, s.m2, s.ins, s.attend, s.refunded],
+    [5, 2, 3, 3, 3, 3, 3, 1, 1]);
+  assert.deepStrictEqual([s.car, s.exp, s.int, s.blankTransport], [1, 0, 1, 1]);
+});
+test('경고와 오류 문구에 이름·연락처가 들어가지 않는다', () => {
+  const pl = plan();
+  const text = JSON.stringify([pl.warnings, pl.errors]);
+  ['가나다', '나다라', '다라마', '라마바', '마바사', '바사아', '010-1111'].forEach(s => assert.ok(!text.includes(s), s));
+});
+test('연락처를 못 읽으면 이관을 막는다', () => {
+  const rows = fakeSheet(); rows[3][3] = '전화 없음';
+  const pl = L.buildLegacyPlan(L.parseLegacySheet(rows), OPTS);
+  assert.strictEqual(pl.ok, false);
+  assert.ok(pl.errors.some(e => e.includes('연락처')));
+});
+test('입력에 주민번호 모양이 섞여 있으면 이관을 막는다', () => {
+  const rows = fakeSheet(); rows[3][4] = '900101-1234567';   // 메일 칸에 실수로 들어간 경우
+  const pl = L.buildLegacyPlan(L.parseLegacySheet(rows), OPTS);
+  assert.strictEqual(pl.ok, false);
+  assert.ok(pl.errors.some(e => e.includes('주민번호')));
+});
+test('같은 회차 번호가 두 번 나오면 막는다', () => {
+  const rows = fakeSheet(); rows[8][1] = '1회차 | 10/12(월)-14(수)';
+  assert.strictEqual(L.buildLegacyPlan(L.parseLegacySheet(rows), OPTS).ok, false);
+});
+test('정상 데이터는 오류 없이 통과', () => {
+  assert.deepStrictEqual(J(plan().errors), []);
+  assert.strictEqual(plan().ok, true);
+});
+
+console.log('이관: 서버가 받은 데이터 정리');
+test('★ 화면이 몰래 넣은 열(주민번호 등)은 서버가 버린다', () => {
+  const parsed = J(L.parseLegacySheet(fakeSheet()));
+  parsed.sessions[0].rows[0].rrn = '900101-1234567';
+  parsed.sessions[0].rows[0].주민번호 = '900101-1234567';
+  parsed.sessions[0].secret = '900101-1234567';
+  const r = L.sanitizeLegacyParsed(parsed);
+  assert.strictEqual(r.ok, true);
+  assert.ok(!JSON.stringify(r.parsed).includes('900101'));
+});
+test('정상 데이터는 정리해도 같은 결과로 계획이 만들어진다', () => {
+  const direct = plan();
+  seq = 0;
+  const r = L.sanitizeLegacyParsed(J(L.parseLegacySheet(fakeSheet())));
+  const viaServer = L.buildLegacyPlan(r.parsed, Object.assign({ makeId: p => p + (++seq) }, OPTS));
+  assert.deepStrictEqual(J(viaServer.summary), J(direct.summary));
+  assert.strictEqual(viaServer.enrollments.length, direct.enrollments.length);
+});
+test('모양이 이상하거나 너무 크면 거부', () => {
+  assert.strictEqual(L.sanitizeLegacyParsed(null).ok, false);
+  assert.strictEqual(L.sanitizeLegacyParsed({}).ok, false);
+  assert.strictEqual(L.sanitizeLegacyParsed({ sessions: [{ rows: 'x' }] }).ok, false);
+  assert.strictEqual(L.sanitizeLegacyParsed({ sessions: new Array(21).fill({ rows: [] }) }).ok, false);
+  assert.strictEqual(L.sanitizeLegacyParsed({ sessions: [{ rows: new Array(501).fill({}) }] }).ok, false);
+});
+test('긴 글자는 잘리고, 이름이 너무 길면 이관 계획에서 막힌다', () => {
+  const rows = fakeSheet(); rows[3][1] = '가'.repeat(100);
+  const r = L.sanitizeLegacyParsed(J(L.parseLegacySheet(rows)));
+  assert.ok(r.parsed.sessions[0].rows[0].name.length <= 60);
+  assert.strictEqual(L.buildLegacyPlan(r.parsed, OPTS).ok, false);
+});
+test('참/거짓 칸은 불리언으로 정리된다', () => {
+  const r = L.sanitizeLegacyParsed({ sessions: [{ title: 't', rows: [{ name: 'a', m1: 'yes', car: 0, pay: 5 }] }] });
+  const row = r.parsed.sessions[0].rows[0];
+  assert.strictEqual(row.m1, true);
+  assert.strictEqual(row.car, false);
+  assert.strictEqual(row.pay, '5');
 });
 
 console.log(`\n${passed}개 통과, ${failed}개 실패`);

@@ -179,6 +179,28 @@ function bulkUpdateUnlocked_(tab, shouldUpdate, buildPatch, email) {
   return changedRows;
 }
 
+/** Config 값을 쓴다 (있으면 고치고 없으면 추가). 잠금은 호출한 쪽에서. */
+function setConfigUnlocked_(key, value) {
+  var sh = openDb_().getSheetByName('Config');
+  var rowNo = findKeyRow_(sh, SCHEMA.Config, key);
+  if (rowNo < 0) appendObjects_(openDb_(), SCHEMA, 'Config', [{ key: key, value: value }]);
+  else sh.getRange(rowNo, 2).setValue(value);
+}
+
+/** 키가 keys 에 있는 행을 지운다 (아래쪽 행부터). 잠금은 호출한 쪽에서. 지운 행 수를 돌려준다. */
+function deleteRowsByKeysUnlocked_(tab, keys) {
+  var sh = openDb_().getSheetByName(tab), def = SCHEMA[tab];
+  var last = sh.getLastRow();
+  if (last < 2 || !keys.length) return 0;
+  var idx = def.cols.indexOf(def.key) + 1;
+  var vals = sh.getRange(2, idx, last - 1, 1).getValues();
+  var set = {}; keys.forEach(function (k) { set[String(k)] = true; });
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) if (set[String(vals[i][0])]) rows.push(i + 2);
+  for (var j = rows.length - 1; j >= 0; j--) sh.deleteRow(rows[j]);
+  return rows.length;
+}
+
 /** 운영 DB를 백업 폴더에 복사한다 (이관 같은 큰 작업 전에 사용). 주민번호 파일은 복사하지 않는다. */
 function backupDb_() {
   var folder = DriveApp.getFolderById(propOrThrow_('BACKUP_FOLDER_ID'));
