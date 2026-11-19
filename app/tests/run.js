@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Schema.gs, Lib.gs의 순수 계산 함수 테스트.
  * 실행: node app/tests/run.js  (프로젝트 폴더 c:\gyeot 에서)
  * 구글 서비스를 쓰지 않으므로 인터넷이나 로그인 없이 돌아간다.
@@ -20,6 +20,9 @@ const L = get(`({
   todayKst, isValidDate, normalizePhone, validateValue, validatePatch, hasConflict, stepPatch,
   normalizeCancel, isDuplicatePerson, validateSession, plainRow, apiError, firstError, FIELD_LABELS,
   validateStaffInput, planStaffRemoval, isEmailIn,
+  validateRrn, rrnMatchesProfile, rrnStatusFor, parseApplicationRound, parseApplicationDate, applicationConsent, parseApplicationSheet,
+  mergeConsent, buildApplicationPlan, planRrnWrites, buildInsuranceRows, addMonths, rrnPurgeCandidates, validateTemplate, validateProgramForm,
+  RRN_CODE_LABELS, APP_HEADERS, APP_REQUIRED,
   parseSessionTitle, mapLegacyColumns, parseLegacySheet, legacyPhone, parseLegacyPay, legacyTransport, buildLegacyPlan, LEGACY_HEADERS, sanitizeLegacyRows,
   ENROLLMENT_EDITABLE, PERSON_EDITABLE, STEP_DEFS, SESSION_RULES,
   SCHEMA, RRN_SCHEMA, STAGES, PROGRAM_IDS, SEED_PROGRAMS, SEED_CONFIG, SEED_TEMPLATES, OWNER_EMAIL
@@ -694,7 +697,7 @@ const lctx = vm.createContext({ console });
 vm.runInContext(logicSrc, lctx);
 const G = vm.runInContext(`({ esc, digits, diffDays, addDays, fmtMD, fmtRange, sessionState, refundDeadline, sortSessions, nextSessionNumber,
   isCancelled, activeOf, cancelledOf, stepDone, countDone, nextAttend, pickupCounts, consentLabel, historyOf, dashKpi,
-  looksLikeRrn, blankRrnColumns, rowsHaveRrn, trimRows })`, lctx);
+  looksLikeRrn, blankRrnColumns, rowsHaveRrn, trimRows, validateRrn, rrnMatchesProfile, splitRrnColumn, todoList, RRN_CODE_LABELS })`, lctx);
 
 console.log('화면: 글자·날짜');
 test('esc: HTML 특수문자를 무력화 (이름에 스크립트를 넣어도 실행되지 않는다)', () => {
@@ -841,6 +844,520 @@ test('뒤쪽 빈 행을 잘라낸다', () => {
   const rows = [['a'], ['', ''], ['b', ''], [''], []];
   assert.strictEqual(G.trimRows(rows).length, 3);
   assert.strictEqual(G.trimRows([[''], []]).length, 0);
+});
+
+/* ===================== 2단계: 주민번호 규칙 ===================== */
+console.log('2단계: 주민번호 형식 검사');
+test('정상 번호는 하이픈 형태로 정리된다 (하이픈 유무·공백 무관)', () => {
+  ['900101-1234567', '9001011234567', ' 900101 - 1234567 ', '900101 1234567'].forEach(s => {
+    const v = L.validateRrn(s);
+    assert.strictEqual(v.ok, true, s);
+    assert.strictEqual(v.rrn, '900101-1234567');
+    assert.strictEqual(v.birthYear, 1990);
+    assert.strictEqual(v.male, true);
+  });
+});
+test('세기 자리: 1·2·5·6은 1900년대, 3·4·7·8은 2000년대, 홀수는 남', () => {
+  assert.strictEqual(L.validateRrn('010101-3234567').birthYear, 2001);
+  assert.strictEqual(L.validateRrn('010101-4234567').male, false);
+  assert.strictEqual(L.validateRrn('900101-5234567').birthYear, 1990);
+  assert.strictEqual(L.validateRrn('010101-7234567').birthYear, 2001);
+});
+test('★ 실제 신청 파일에서 본 오류 유형을 모두 잡는다 (값을 담지 않고 코드만)', () => {
+  const cases = [['', 'EMPTY'], [null, 'EMPTY'], ['19900101', 'LENGTH'], ['12345678', 'LENGTH'], ['9001011', 'LENGTH'], ['900101123456', 'LENGTH'],
+    ['901301-1234567', 'BIRTHDATE'], ['900230-1234567', 'BIRTHDATE'], ['900101-9234567', 'GENDER_DIGIT'], ['900101-0234567', 'GENDER_DIGIT'], ['abc', 'EMPTY']];
+  cases.forEach(([raw, code]) => {
+    const v = L.validateRrn(raw);
+    assert.strictEqual(v.ok, false, String(raw));
+    assert.strictEqual(v.code, code, String(raw));
+    assert.ok(!('rrn' in v), '실패 결과에 번호가 들어 있음');
+  });
+});
+test('숫자 칸으로 읽혀 앞의 0이 지워진 12자리 숫자는 되살린다 (문자열은 되살리지 않는다)', () => {
+  const v = L.validateRrn(101013234567);               // 0101013234567
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.rrn, '010101-3234567');
+  assert.strictEqual(v.restored, true);
+  assert.strictEqual(L.validateRrn('101013234567').ok, false);
+  assert.strictEqual(L.validateRrn(9001011234567).rrn, '900101-1234567');
+});
+test('체크섬은 검사하지 않는다 (맞지 않는 번호도 형식이 맞으면 통과)', () => {
+  assert.strictEqual(L.validateRrn('900101-1111111').ok, true);
+});
+
+console.log('2단계: 성별·출생연도 대조');
+test('일치하면 통과', () => {
+  assert.strictEqual(L.rrnMatchesProfile('900101-1234567', '남', 1990).ok, true);
+  assert.strictEqual(L.rrnMatchesProfile('950101-2234567', '여', '1995').ok, true);
+});
+test('성별이 다르면 GENDER_MISMATCH, 출생연도가 다르면 BIRTH_MISMATCH, 둘 다면 둘 다', () => {
+  assert.strictEqual(L.rrnMatchesProfile('900101-2234567', '남', 1990).code, 'GENDER_MISMATCH');
+  assert.strictEqual(L.rrnMatchesProfile('900101-1234567', '남', 1991).code, 'BIRTH_MISMATCH');
+  assert.deepStrictEqual(J(L.rrnMatchesProfile('900101-1234567', '여', 1991).codes), ['BIRTH_MISMATCH', 'GENDER_MISMATCH']);
+});
+test('성별·출생연도를 모르면 그 항목은 대조하지 않는다', () => {
+  assert.strictEqual(L.rrnMatchesProfile('900101-1234567', '', '').ok, true);
+  assert.strictEqual(L.rrnMatchesProfile('900101-1234567', '남', '').ok, true);
+});
+test('형식이 틀리면 형식 사유가 먼저', () => {
+  assert.strictEqual(L.rrnMatchesProfile('9001011', '남', 1990).code, 'LENGTH');
+});
+test('저장된 번호의 상태: 없음 / 보관 중 / 확인 필요 (값을 돌려주지 않는다)', () => {
+  const p = { gender: '남', birth_year: 1990 };
+  assert.strictEqual(L.rrnStatusFor(null, p), 'missing');
+  assert.strictEqual(L.rrnStatusFor('', p), 'missing');
+  assert.strictEqual(L.rrnStatusFor('900101-1234567', p), 'ok');
+  assert.strictEqual(L.rrnStatusFor('900101-2234567', p), 'check');
+  assert.strictEqual(L.rrnStatusFor('9001011', p), 'check');
+});
+test('사유 코드마다 한글 설명이 있다', () => {
+  ['EMPTY', 'LENGTH', 'BIRTHDATE', 'GENDER_DIGIT', 'BIRTH_MISMATCH', 'GENDER_MISMATCH'].forEach(c => assert.ok(L.RRN_CODE_LABELS[c], c));
+});
+test('★ 화면의 주민번호 규칙과 서버 규칙이 같은 결과를 낸다', () => {
+  const corpus = ['900101-1234567', '9001011234567', ' 900101 - 1234567 ', '19900101', '9001011', '900101123456', '901301-1234567', '900101-9234567',
+    '', null, 'abc', 101013234567, 9001011234567, '101013234567', '010101-3234567', '900230-1234567', '000229-3234567'];
+  corpus.forEach(s => assert.deepStrictEqual(J(G.validateRrn(s)), J(L.validateRrn(s)), String(s)));
+  [['900101-1234567', '남', 1990], ['900101-2234567', '남', 1990], ['900101-1234567', '여', 1991], ['9001011', '남', 1990], ['900101-1234567', '', '']]
+    .forEach(([r, g, b]) => assert.deepStrictEqual(J(G.rrnMatchesProfile(r, g, b)), J(L.rrnMatchesProfile(r, g, b)), r));
+  assert.deepStrictEqual(J(G.RRN_CODE_LABELS), J(L.RRN_CODE_LABELS));
+});
+
+/* ===================== 2단계: 신청 엑셀 읽기·판정 ===================== */
+console.log('2단계: 신청 엑셀 읽기');
+test('회차 칸: 테마가 있는 실제 형식과 요일이 있는 형식, 간격 불규칙을 모두 읽는다', () => {
+  assert.deepStrictEqual(J(L.parseApplicationRound('3회차 | 예술의 곁 | 10/19-21')), { n: 3, theme: '예술의 곁', startMD: '10-19', endMD: '10-21' });
+  assert.deepStrictEqual(J(L.parseApplicationRound('5회차  | 자연의 곁 | 10/26-28')), { n: 5, theme: '자연의 곁', startMD: '10-26', endMD: '10-28' });
+  assert.deepStrictEqual(J(L.parseApplicationRound('3회차 | 10/19(월)-21(수)')), { n: 3, theme: null, startMD: '10-19', endMD: '10-21' });
+  assert.deepStrictEqual(J(L.parseApplicationRound('7회차 | 마을의 곁 | 10/30-11/1')), { n: 7, theme: '마을의 곁', startMD: '10-30', endMD: '11-01' });
+  assert.deepStrictEqual(J(L.parseApplicationRound('2회차')), { n: 2, theme: null, startMD: null, endMD: null });
+});
+test('회차 칸이 비었거나 번호가 없으면 null', () => {
+  ['', null, '날짜 미정', '예술의 곁 | 10/19-21'].forEach(s => assert.strictEqual(L.parseApplicationRound(s), null, String(s)));
+});
+test('신청일: 시각의 시가 한 자리여도 날짜를 읽는다', () => {
+  assert.strictEqual(L.parseApplicationDate('2026-11-10 9:30'), '2026-11-10');
+  assert.strictEqual(L.parseApplicationDate('2026-11-10 09:30'), '2026-11-10');
+  assert.strictEqual(L.parseApplicationDate('2026-11-10'), '2026-11-10');
+  assert.strictEqual(L.parseApplicationDate('2026-13-40'), '');
+  assert.strictEqual(L.parseApplicationDate(''), '');
+});
+test('동의 칸: 동의 / 미동의 / 빈칸 / 읽을 수 없음', () => {
+  assert.deepStrictEqual(['동의', '미동의', '', ' 동의 ', '네'].map(L.applicationConsent), ['Y', 'N', '', 'Y', null]);
+});
+
+/* 실제 신청 파일과 같은 열 이름·같은 글자 모양의 가짜 시트 */
+const AHEAD = ['번호', '이름', '연락처', '성별', '출생연도', '직업', '거주지', '이메일', '여행자 보험 가입을 위해 주민번호 전체를 작성해주세요.',
+  '프로그램 상세 시간표 및 참가비 안내는 신청하신 메일로 보내드릴 예정입니다. 합격문자를 받으시면 꼭 메일을 확인해 주세요. ', '신청하시는 회차를 선택해주세요',
+  '이외에 곁마을 운영진에게 하고싶은 말, 혹은 질문이 있다면 자유롭게 남겨주세요. ', '기타답변', '초상권동의', '추가보유동의', '신청일', '합격여부', '참석 여부', '취소사유'];
+const A = (o = {}) => [o.hp || '1001', o.name || '가짜갑', o.phone || '01011110001', o.g || '여', o.b || '1990', o.job || '', o.area || '서울', o.mail || 'a@example.com',
+  o.rrn === undefined ? '900101-2234567' : o.rrn, o.notice === undefined ? '예' : o.notice, o.round === undefined ? '9회차 | 마을의 곁 | 12/7-9' : o.round,
+  o.memo || '', o.memo2 || '', o.portrait || '동의', o.retain || '동의', o.applied || '2026-11-10 9:30', o.pass || '합격', o.attend || '', o.cancel || ''];
+const APP_TODAY = '2026-11-19';
+const SESSIONS = [
+  { session_id: 'w1', program_id: 'w', n: 1, start: '2026-10-06', end: '2026-10-08', note: '기존 엑셀 이관' },
+  { session_id: 'w2', program_id: 'w', n: 2, start: '2026-10-12', end: '2026-10-14', note: '기존 엑셀 이관' },
+  { session_id: 'w3', program_id: 'w', n: 3, start: '2026-10-19', end: '2026-10-21', note: '' },
+  { session_id: 'w9', program_id: 'w', n: 9, start: '2026-12-07', end: '2026-12-09', note: '' },
+  { session_id: 'l1', program_id: 'l', n: 1, start: '2026-12-07', end: '2026-12-11', note: '' }];
+const mkExisting = () => ({
+  sessions: J(SESSIONS),
+  people: [
+    { person_id: 'p1', name: '기존갑', phone: '010-2222-0001', email: '', gender: '여', birth_year: 1990, job: '', area: '', consent_retain: '', consent_portrait: '', updated_at: 'x' },
+    { person_id: 'p2', name: '기존을', phone: '010-2222-0002', email: 'old@example.com', gender: '남', birth_year: 1991, job: '디자이너', area: '부산', consent_retain: 'Y', consent_portrait: 'Y', updated_at: 'x' },
+    { person_id: 'p3', name: '기존병', phone: '010-2222-0003', email: '', gender: '여', birth_year: 1992, job: '', area: '', consent_retain: 'N', consent_portrait: '', updated_at: 'x' }],
+  enrollments: [
+    { enroll_id: 'e1', session_id: 'w1', person_id: 'p1', hp_no: '', applied_at: '', notice_ack: '', memo: '', attend: '', cancel_reason: '', pass: '합격' },
+    { enroll_id: 'e2', session_id: 'w1', person_id: 'p2', hp_no: '5', applied_at: '2026-09-01', notice_ack: 'Y', memo: '원래 메모', attend: '참석', cancel_reason: '', pass: '합격' },
+    { enroll_id: 'e3', session_id: 'w1', person_id: 'p3', hp_no: '', applied_at: '', notice_ack: '', memo: '', attend: '', cancel_reason: '', pass: '합격' }]
+});
+const parseAndPlan = (rows, opts = {}, existing = mkExisting()) => {
+  const parsed = L.parseApplicationSheet([AHEAD].concat(rows));
+  let n = 0;
+  return { parsed, plan: L.buildApplicationPlan(parsed, existing, Object.assign({ program_id: 'w', today: APP_TODAY, now: APP_TODAY + ' 12:00:00', actor: 'staff@example.com', makeId: p => p + (++n) }, opts)) };
+};
+
+test('시트를 열 이름으로 읽는다 (BOM·긴 머리글·주민번호 열 제외)', () => {
+  const head = AHEAD.slice(); head[0] = '﻿번호';
+  const p = L.parseApplicationSheet([head, A({ name: '가짜갑', memo: '질문 있어요', memo2: '추가 의견' })]);
+  assert.deepStrictEqual(J(p.missing), []);
+  assert.strictEqual(p.rows.length, 1);
+  assert.strictEqual(p.rows[0].name, '가짜갑');
+  assert.strictEqual(p.rows[0].memo, '질문 있어요 / 추가 의견');
+  assert.strictEqual(p.rows[0].round.theme, '마을의 곁');
+  assert.strictEqual(p.rows[0].applied, '2026-11-10');
+  assert.strictEqual(p.rows[0].retain, 'Y');
+  assert.strictEqual(p.rows[0].rowNo, 2);
+});
+test('★ 읽은 결과에 주민번호가 없다 (이 함수는 주민번호 열을 읽지 않는다)', () => {
+  const p = L.parseApplicationSheet([AHEAD, A({ rrn: '900101-1234567' }), A({ name: '가짜을', rrn: '9001011234567' })]);
+  assert.ok(!JSON.stringify(p).includes('900101'), '읽은 결과에 주민번호가 있음');
+});
+test('필수 열이 없으면 못 찾은 열을 알린다', () => {
+  const p = L.parseApplicationSheet([['이름', '연락처'], ['가짜갑', '01011110001']]);
+  assert.ok(p.missing.length > 3 && p.missing.includes('합격여부'));
+  assert.strictEqual(L.buildApplicationPlan(p, mkExisting(), { program_id: 'w', today: APP_TODAY }).ok, false);
+  assert.deepStrictEqual(J(L.parseApplicationSheet([['a', 'b']]).missing), ['이름']);
+});
+test('이름이 없는 행은 경고만 하고 건너뛴다 (위치만 표시)', () => {
+  const p = L.parseApplicationSheet([AHEAD, A({ name: '' }).map((v, i) => (i === 1 ? '' : v))]);
+  assert.strictEqual(p.rows.length, 0);
+  assert.ok(p.warnings[0].msg.includes('2행'));
+});
+
+console.log('2단계: 신청 판정');
+test('신규: 종료 전 회차의 합격 신규는 새 사람·새 참여 기록, 주민번호 저장 대상', () => {
+  const { plan } = parseAndPlan([A({ name: '신규갑', phone: '01099990001' })]);
+  assert.strictEqual(plan.ok, true);
+  assert.strictEqual(plan.rows[0].decision, 'new');
+  assert.strictEqual(plan.rows[0].session_id, 'w9');
+  assert.strictEqual(plan.rows[0].method, 'exact');
+  assert.strictEqual(plan.rows[0].rrnEligible, true);
+  assert.strictEqual(plan.newPeople.length, 1);
+  assert.strictEqual(plan.newPeople[0].phone, '010-9999-0001');
+  assert.strictEqual(plan.newEnrollments[0].pass, '합격');
+  assert.strictEqual(plan.newEnrollments[0].applied_at, '2026-11-10');
+  assert.strictEqual(plan.newEnrollments[0].notice_ack, 'Y');
+  assert.strictEqual(plan.newEnrollments[0].updated_by, 'staff@example.com');
+});
+test('불합격은 제외, 합격여부를 못 읽으면 오류', () => {
+  const { plan } = parseAndPlan([A({ name: '탈락갑', pass: '불합격' }), A({ name: '이상갑', pass: '대기' })]);
+  assert.strictEqual(plan.rows[0].decision, 'rejected');
+  assert.strictEqual(plan.rows[1].decision, 'error');
+  assert.strictEqual(plan.newPeople.length, 0);
+});
+test('회차 칸이 비었거나 맞는 회차가 없으면 "회차 확인 필요"', () => {
+  const { plan } = parseAndPlan([A({ name: '빈칸갑', round: '' }), A({ name: '없음갑', round: '8회차 | 마을의 곁 | 12/1-3' })]);
+  assert.deepStrictEqual(J(plan.rows.map(r => r.decision)), ['needs_session', 'needs_session']);
+  assert.strictEqual(plan.summary.needs_session, 2);
+});
+test('프로그램은 업로드할 때 고른 것만 본다. 날짜가 크게 다르면 번호가 같아도 연결하지 않는다', () => {
+  const { plan } = parseAndPlan([A({ name: '살아갑', round: '1회차 | 마을의 곁 | 12/7-11' })], { program_id: 'w' });
+  assert.strictEqual(plan.rows[0].decision, 'needs_session');
+  const { plan: p2 } = parseAndPlan([A({ name: '살아갑', round: '1회차 | 마을의 곁 | 12/7-11' })], { program_id: 'l' });
+  assert.strictEqual(p2.rows[0].session_id, 'l1');
+});
+test('날짜가 달라도 회차 번호가 하나로 정해지면 연결하고 경고한다', () => {
+  const { plan } = parseAndPlan([A({ name: '날짜갑', round: '2회차 | 마을의 곁 | 10/13-15' })]);
+  assert.strictEqual(plan.rows[0].session_id, 'w2');
+  assert.strictEqual(plan.rows[0].method, 'number');
+  assert.ok(plan.warnings.some(w => w.includes('날짜가 달라요')));
+});
+test('수동으로 지정한 회차를 쓴다 (회차 칸이 비어 있어도)', () => {
+  const { plan } = parseAndPlan([A({ name: '지정갑', round: '' })], { sessionMap: { 2: 'w9' } });
+  assert.strictEqual(plan.rows[0].decision, 'new');
+  assert.strictEqual(plan.rows[0].method, 'manual');
+  assert.strictEqual(plan.rows[0].session_id, 'w9');
+});
+test('이미 등록된 사람: 새로 만들지 않고 빈 칸만 채운다', () => {
+  const { plan } = parseAndPlan([A({ name: '기존갑', phone: '01022220001', round: '1회차 | 마을의 곁 | 10/6-8', job: '기획자', area: '서울', mail: 'p1@example.com', memo: '질문', hp: '77' })]);
+  assert.strictEqual(plan.rows[0].decision, 'existing');
+  assert.strictEqual(plan.newPeople.length, 0);
+  assert.strictEqual(plan.newEnrollments.length, 0);
+  assert.strictEqual(plan.rows[0].rrnEligible, false);
+  const f = x => plan.fills.find(y => y.field === x);
+  assert.strictEqual(f('job').to, '기획자');
+  assert.strictEqual(f('area').to, '서울');
+  assert.strictEqual(f('email').to, 'p1@example.com');
+  assert.strictEqual(f('applied_at').to, '2026-11-10');
+  assert.strictEqual(f('memo').to, '질문');
+  assert.strictEqual(f('hp_no').to, '77');
+  assert.strictEqual(f('consent_retain').to, 'Y');
+  assert.strictEqual(f('consent_portrait').to, 'Y');
+  assert.ok(plan.fills.every(x => x.from === ''));
+});
+test('이미 값이 있는 칸은 덮어쓰지 않는다', () => {
+  const { plan } = parseAndPlan([A({ name: '기존을', phone: '01022220002', round: '1회차 | 마을의 곁 | 10/6-8', job: '개발자', area: '서울', mail: 'new@example.com', memo: '새 메모', hp: '99' })]);
+  const fields = plan.fills.map(x => x.field);
+  ['job', 'area', 'email', 'memo', 'hp_no', 'applied_at', 'notice_ack'].forEach(f => assert.ok(!fields.includes(f), f + ' 이(가) 덮어써짐'));
+});
+test('★ 동의가 다르면 더 제한적인 쪽: 동의→미동의는 바뀌고, 미동의→동의는 미동의를 유지, 둘 다 경고', () => {
+  const { plan } = parseAndPlan([
+    A({ name: '기존을', phone: '01022220002', round: '1회차 | 마을의 곁 | 10/6-8', portrait: '미동의', retain: '미동의' }),
+    A({ name: '기존병', phone: '01022220003', round: '1회차 | 마을의 곁 | 10/6-8', retain: '동의' })]);
+  const to = (id, f) => (plan.fills.find(x => x.id === id && x.field === f) || {}).to;
+  assert.strictEqual(to('p2', 'consent_retain'), 'N');
+  assert.strictEqual(to('p2', 'consent_portrait'), 'N');
+  assert.strictEqual(plan.fills.find(x => x.id === 'p2' && x.field === 'consent_retain').from, 'Y');
+  assert.strictEqual(to('p3', 'consent_retain'), undefined);       // 저장된 미동의를 유지
+  assert.ok(plan.warnings.filter(w => w.includes('더 제한적인')).length >= 3);
+  assert.strictEqual(plan.summary.consentChanged, 2);
+});
+test('동의 병합 규칙', () => {
+  assert.deepStrictEqual(J(L.mergeConsent('', 'Y')), { value: 'Y', conflict: false });
+  assert.deepStrictEqual(J(L.mergeConsent('Y', '')), { value: 'Y', conflict: false });
+  assert.deepStrictEqual(J(L.mergeConsent('Y', 'Y')), { value: 'Y', conflict: false });
+  assert.deepStrictEqual(J(L.mergeConsent('Y', 'N')), { value: 'N', conflict: true });
+  assert.deepStrictEqual(J(L.mergeConsent('N', 'Y')), { value: 'N', conflict: true });
+  assert.deepStrictEqual(J(L.mergeConsent('', '')), { value: '', conflict: false });
+});
+test('취소사유가 있는 새 신청은 취소 상태로 등록하고 주민번호는 저장하지 않는다', () => {
+  const { plan } = parseAndPlan([A({ name: '취소갑', phone: '01099990009', cancel: '개인 사정' })]);
+  assert.strictEqual(plan.rows[0].decision, 'cancelled_new');
+  assert.strictEqual(plan.newEnrollments[0].cancel_reason, '개인 사정');
+  assert.strictEqual(plan.newEnrollments[0].cancelled_at, APP_TODAY);
+  assert.strictEqual(plan.rows[0].rrnEligible, false);
+});
+test('이미 등록된 사람에게 취소사유가 있어도 바꾸지 않고 경고만 한다', () => {
+  const { plan } = parseAndPlan([A({ name: '기존갑', phone: '01022220001', round: '1회차 | 마을의 곁 | 10/6-8', cancel: '사정' })]);
+  assert.strictEqual(plan.rows[0].decision, 'existing');
+  assert.ok(plan.warnings.some(w => w.includes('취소사유')));
+  assert.ok(!plan.fills.some(x => x.field === 'cancel_reason'));
+});
+test('같은 파일 안에서 같은 사람이 같은 회차에 또 나오면 건너뛴다', () => {
+  const { plan } = parseAndPlan([A({ name: '중복갑', phone: '01099990002' }), A({ name: '중복갑', phone: '010-9999-0002' })]);
+  assert.deepStrictEqual(J(plan.rows.map(r => r.decision)), ['new', 'duplicate_in_file']);
+  assert.strictEqual(plan.newEnrollments.length, 1);
+});
+test('같은 사람이 다른 회차에 신청하면 사람은 하나, 참여 기록은 둘', () => {
+  const { plan } = parseAndPlan([A({ name: '여럿갑', phone: '01099990003', round: '9회차 | 마을의 곁 | 12/7-9' }), A({ name: '여럿갑', phone: '01099990003', round: '3회차 | 예술의 곁 | 10/19-21' })]);
+  assert.strictEqual(plan.newPeople.length, 1);
+  assert.strictEqual(plan.newEnrollments.length, 2);
+  assert.deepStrictEqual(J(plan.rows.map(r => r.rrnEligible)), [true, false]);    // 이미 끝난 3회차는 저장 대상이 아님
+});
+test('★ 이미 끝난 회차의 신규는 주민번호 저장 대상이 아니다 (R4)', () => {
+  const { plan } = parseAndPlan([A({ name: '지난갑', phone: '01099990004', round: '3회차 | 예술의 곁 | 10/19-21' })]);
+  assert.strictEqual(plan.rows[0].decision, 'new');
+  assert.strictEqual(plan.rows[0].rrnEligible, false);
+});
+test('읽을 수 없는 연락처·이름은 그 행만 오류, 나머지는 계속', () => {
+  const { plan } = parseAndPlan([A({ name: '전화갑', phone: '없음' }), A({ name: '정상갑', phone: '01099990005' })]);
+  assert.deepStrictEqual(J(plan.rows.map(r => r.decision)), ['error', 'new']);
+  assert.strictEqual(plan.ok, true);
+});
+test('앞자리 0이 지워진 연락처도 읽는다', () => {
+  const { plan } = parseAndPlan([A({ name: '전화을', phone: '1099990006' })]);
+  assert.strictEqual(plan.newPeople[0].phone, '010-9999-0006');
+});
+test('★ 회차 칸의 테마 이름을 회차 메모(비고)에 적는다. 이미 있으면 다시 적지 않는다', () => {
+  const { plan } = parseAndPlan([A({ name: '테마갑', phone: '01099990007', round: '3회차 | 예술의 곁 | 10/19-21' }), A({ name: '테마을', phone: '01099990008', round: '3회차 | 예술의 곁 | 10/19-21' })]);
+  assert.strictEqual(plan.sessionNotes.length, 1);
+  assert.deepStrictEqual(J(plan.sessionNotes[0]), { session_id: 'w3', from: '', to: '테마: 예술의 곁' });
+  const ex = mkExisting(); ex.sessions[0].note = '기존 엑셀 이관 · 테마: 마을의 곁';
+  const again = parseAndPlan([A({ name: '테마병', phone: '01099990010', round: '1회차 | 마을의 곁 | 10/6-8' })], {}, ex).plan;
+  assert.strictEqual(again.sessionNotes.length, 0);
+  const append = parseAndPlan([A({ name: '테마정', phone: '01099990011', round: '2회차 | 마을의 곁 | 10/12-14' })]).plan;
+  assert.strictEqual(append.sessionNotes[0].to, '기존 엑셀 이관 · 테마: 마을의 곁');
+});
+test('★ 참석 여부는 옵션을 켰을 때, 이미 시작한 회차의 빈 칸에만, 참석·불참만 반영한다 (한 번만)', () => {
+  const rows = [
+    A({ name: '기존갑', phone: '01022220001', round: '1회차 | 마을의 곁 | 10/6-8', attend: '참석' }),     // 시작함 · 빈 칸 → 반영
+    A({ name: '기존을', phone: '01022220002', round: '1회차 | 마을의 곁 | 10/6-8', attend: '불참' }),     // 이미 '참석' → 덮어쓰지 않음
+    A({ name: '기존병', phone: '01022220003', round: '1회차 | 마을의 곁 | 10/6-8', attend: '미확인' }),   // 미확인 → 무시
+    A({ name: '미래갑', phone: '01099990012', attend: '참석' })];                                         // 아직 시작 전 회차 → 무시
+  const on = parseAndPlan(rows, { applyAttend: true }).plan;
+  const att = on.fills.filter(x => x.field === 'attend');
+  assert.deepStrictEqual(J(att.map(x => [x.id, x.to])), [['e1', '참석']]);
+  assert.strictEqual(on.newEnrollments[0].attend, '');
+  assert.strictEqual(on.summary.attendFilled, 1);
+  const off = parseAndPlan(rows, { applyAttend: false }).plan;
+  assert.strictEqual(off.fills.filter(x => x.field === 'attend').length, 0);
+});
+test('★ 경고·오류·요약·판정 어디에도 이름·연락처·주민번호가 없다', () => {
+  const { plan } = parseAndPlan([
+    A({ name: '신규갑', phone: '01099990001', rrn: '900101-1234567' }), A({ name: '탈락갑', phone: '01099990002', pass: '불합격' }),
+    A({ name: '전화갑', phone: '없음' }), A({ name: '날짜갑', phone: '01099990003', round: '2회차 | 마을의 곁 | 10/13-15' }),
+    A({ name: '기존을', phone: '01022220002', round: '1회차 | 마을의 곁 | 10/6-8', portrait: '미동의' })]);
+  const text = JSON.stringify([plan.errors, plan.warnings, plan.summary, plan.rows]);
+  ['신규갑', '탈락갑', '전화갑', '날짜갑', '기존을', '01099990001', '010-9999', '900101', '1234567'].forEach(s => assert.ok(!text.includes(s), s));
+});
+test('행이 500개를 넘으면 막는다', () => {
+  const rows = []; for (let i = 0; i < 501; i++) rows.push(A({ name: '행' + i, phone: '0109999' + String(1000 + i) }));
+  assert.strictEqual(parseAndPlan(rows).plan.ok, false);
+});
+test('실제 신청 파일의 모양을 본뜬 36행도 문제없이 판정한다 (합격 33·불합격 3·회차 빈칸 3)', () => {
+  const rows = [];
+  const rounds = ['1회차 | 마을의 곁 | 10/6-8', '2회차 | 마을의 곁 | 10/12-14', '3회차 | 예술의 곁 | 10/19-21'];
+  for (let i = 0; i < 33; i++) rows.push(A({ name: '실제형' + i, phone: '010' + String(30000000 + i), round: i < 30 ? rounds[i % 3] : '' }));
+  for (let i = 0; i < 3; i++) rows.push(A({ name: '탈락형' + i, phone: '010' + String(40000000 + i), pass: '불합격', round: rounds[i] }));
+  const { plan } = parseAndPlan(rows);
+  assert.strictEqual(plan.ok, true);
+  assert.strictEqual(plan.summary.total, 36);
+  assert.strictEqual(plan.summary.rejected, 3);
+  assert.strictEqual(plan.summary.needs_session, 3);
+  assert.strictEqual(plan.summary.new, 30);
+});
+
+console.log('2단계: 주민번호 저장 목록 (등록 때)');
+const rrnPlan = () => parseAndPlan([
+  A({ name: '저장갑', phone: '01099991001', g: '남', b: '1990' }),                                  // 행2: 남, 1990
+  A({ name: '틀림갑', phone: '01099991002', g: '남', b: '1990' }),                                  // 행3
+  A({ name: '불일치', phone: '01099991003', g: '남', b: '1990' }),                                  // 행4
+  A({ name: '빠짐갑', phone: '01099991004' }),                                                       // 행5
+  A({ name: '지난갑', phone: '01099991005', round: '3회차 | 예술의 곁 | 10/19-21' }),               // 행6: 종료된 회차
+  A({ name: '탈락갑', phone: '01099991006', pass: '불합격' }),                                       // 행7
+  A({ name: '취소갑', phone: '01099991007', cancel: '사정' })]).plan;                                // 행8
+test('★ 저장 대상(합격·신규·종료 전)에만 저장되고, 형식 오류·대조 불일치·번호 없음은 저장되지 않는다', () => {
+  const plan = rrnPlan();
+  const out = L.planRrnWrites(plan, [
+    { rowNo: 2, rrn: '900101-1234567' }, { rowNo: 3, rrn: '9001011' }, { rowNo: 4, rrn: '900101-2234567' },
+    { rowNo: 6, rrn: '900101-1234567' }, { rowNo: 7, rrn: '900101-1234567' }, { rowNo: 8, rrn: '900101-1234567' }], SESSIONS);
+  const st = Object.fromEntries(out.status.map(s => [s.rowNo, s.state]));
+  assert.deepStrictEqual(st, { 2: 'saved', 3: 'invalid', 4: 'mismatch', 5: 'missing', 6: 'skipped_ineligible', 8: 'skipped_ineligible' });
+  assert.strictEqual(out.writes.length, 1);
+  assert.strictEqual(out.writes[0].rowNo, 2);
+  assert.strictEqual(out.writes[0].rrn, '900101-1234567');
+  assert.strictEqual(out.writes[0].session_end, '2026-12-09');
+  assert.deepStrictEqual(J(out.counts), { saved: 1, skipped_ineligible: 2, invalid: 1, mismatch: 1, missing: 1 });
+});
+test('대조에 걸린 번호도 "그대로 저장"을 선택하면 저장된다. 형식 오류는 선택해도 저장되지 않는다', () => {
+  const plan = rrnPlan();
+  const out = L.planRrnWrites(plan, [{ rowNo: 4, rrn: '900101-2234567', confirmMismatch: true }, { rowNo: 3, rrn: '9001011', confirmMismatch: true }], SESSIONS);
+  assert.strictEqual(out.status.find(s => s.rowNo === 4).state, 'saved');
+  assert.strictEqual(out.status.find(s => s.rowNo === 3).state, 'invalid');
+  assert.strictEqual(out.writes.length, 1);
+});
+test('숫자 칸의 앞 0이 지워진 번호도 되살려 저장한다', () => {
+  const plan = parseAndPlan([A({ name: '영갑', phone: '01099991010', g: '남', b: '2001', rrn: '' })]).plan;
+  const out = L.planRrnWrites(plan, [{ rowNo: 2, rrn: 101013234567 }], SESSIONS);
+  assert.strictEqual(out.writes[0].rrn, '010101-3234567');
+});
+test('★ 결과 상태·집계에는 번호 값이 없다 (writes 만 값을 가진다)', () => {
+  const plan = rrnPlan();
+  const out = L.planRrnWrites(plan, [{ rowNo: 2, rrn: '900101-1234567' }, { rowNo: 3, rrn: '9001011' }], SESSIONS);
+  assert.ok(!JSON.stringify([out.status, out.counts]).match(/\d{6}|\d{7}/));
+});
+test('존재하지 않는 행 번호의 번호는 무시한다', () => {
+  const out = L.planRrnWrites(rrnPlan(), [{ rowNo: 99, rrn: '900101-1234567' }], SESSIONS);
+  assert.strictEqual(out.writes.length, 0);
+});
+
+console.log('2단계: 보험 명단');
+const INS_ENR = [
+  { enroll_id: 'a', session_id: 'w9', person_id: 'pa', pass: '합격', cancel_reason: '' },
+  { enroll_id: 'b', session_id: 'w9', person_id: 'pb', pass: '합격', cancel_reason: '' },
+  { enroll_id: 'c', session_id: 'w9', person_id: 'pc', pass: '합격', cancel_reason: '사정' },
+  { enroll_id: 'd', session_id: 'w1', person_id: 'pd', pass: '합격', cancel_reason: '' }];
+const INS_PEOPLE = [{ person_id: 'pa', name: '갑' }, { person_id: 'pb', name: '을' }, { person_id: 'pc', name: '병' }, { person_id: 'pd', name: '정' }];
+test('그 회차의 합격·취소 아님·번호 있음만 명단에, 번호가 없는 사람은 이름만 따로', () => {
+  const r = L.buildInsuranceRows(INS_ENR, INS_PEOPLE, [{ enroll_id: 'a', rrn: '900101-1234567' }, { enroll_id: 'c', rrn: '900101-1234567' }, { enroll_id: 'd', rrn: '900101-1234567' }], 'w9');
+  assert.deepStrictEqual(J(r.list.map(x => [x.name, x.rrn])), [['갑', '900101-1234567']]);
+  assert.deepStrictEqual(J(r.excluded.map(x => x.name)), ['을']);
+});
+test('명단은 입력한 순서(참여 기록 순서)를 따른다', () => {
+  const r = L.buildInsuranceRows(INS_ENR, INS_PEOPLE, [{ enroll_id: 'b', rrn: '950101-2234567' }, { enroll_id: 'a', rrn: '900101-1234567' }], 'w9');
+  assert.deepStrictEqual(J(r.list.map(x => x.name)), ['갑', '을']);
+});
+
+console.log('2단계: 자동 정리 날짜');
+test('개월 더하기: 말일 보정과 해 넘김', () => {
+  assert.strictEqual(L.addMonths('2026-10-28', 3), '2027-01-28');
+  assert.strictEqual(L.addMonths('2026-11-30', 3), '2027-02-28');
+  assert.strictEqual(L.addMonths('2026-01-31', 1), '2026-02-28');
+  assert.strictEqual(L.addMonths('2028-01-31', 1), '2028-02-29');
+  assert.strictEqual(L.addMonths('2026-12-15', 1), '2027-01-15');
+  assert.strictEqual(L.addMonths('날짜 아님', 3), '');
+});
+test('★ 회차 종료 3개월이 "지난" 번호만 정리 대상 (당일까지는 보관)', () => {
+  const rows = [{ enroll_id: 'x', session_end: '2026-10-28' }];
+  assert.deepStrictEqual(L.rrnPurgeCandidates(rows, '2027-01-27', 3), []);
+  assert.deepStrictEqual(L.rrnPurgeCandidates(rows, '2027-01-28', 3), []);
+  assert.deepStrictEqual(L.rrnPurgeCandidates(rows, '2027-01-29', 3), ['x']);
+});
+test('종료일이 비었거나 이상한 행은 정리 대상으로 잡지 않는다', () => {
+  assert.deepStrictEqual(L.rrnPurgeCandidates([{ enroll_id: 'y', session_end: '' }, { enroll_id: 'z', session_end: 'x' }], '2030-01-01', 3), []);
+});
+
+console.log('2단계: 문구·프로그램 설정 검증');
+test('문구는 이름·단계·프로그램·방식·본문이 규칙에 맞아야 저장된다', () => {
+  const ok = L.validateTemplate({ name: ' 입금 요청 ', stage: 'pay', program_id: 'w', channel: 'sms', body: '[곁마을] {이름}님 입금 부탁드려요' });
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.clean.name, '입금 요청');
+  assert.strictEqual(L.validateTemplate({ name: '공통', stage: 'm1', program_id: 'all', channel: 'mail', body: 'x' }).ok, true);
+  ['stage', 'program_id', 'channel'].forEach(k => {
+    const t = { name: 'a', stage: 'pay', program_id: 'w', channel: 'sms', body: 'x' }; t[k] = '잘못';
+    assert.strictEqual(L.validateTemplate(t).ok, false, k);
+  });
+  assert.strictEqual(L.validateTemplate({ name: '', stage: 'pay', program_id: 'w', channel: 'sms', body: 'x' }).ok, false);
+  assert.strictEqual(L.validateTemplate({ name: 'a', stage: 'pay', program_id: 'w', channel: 'sms', body: '' }).ok, false);
+  assert.strictEqual(L.validateTemplate({ name: 'a', stage: 'pay', program_id: 'w', channel: 'sms', body: 'x'.repeat(2001) }).ok, false);
+  assert.strictEqual(L.validateTemplate(null).ok, false);
+});
+test('★ 문구 본문에 주민번호 모양이 있으면 저장하지 않는다', () => {
+  const r = L.validateTemplate({ name: 'a', stage: 'pay', program_id: 'w', channel: 'sms', body: '번호는 900101-1234567 입니다' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.body);
+});
+test('만족도 폼 링크: 비우기·http(s)만 허용', () => {
+  assert.deepStrictEqual(J(L.validateProgramForm('')), { ok: true, value: '' });
+  assert.strictEqual(L.validateProgramForm(' https://forms.gle/abc123 ').value, 'https://forms.gle/abc123');
+  assert.strictEqual(L.validateProgramForm('http://example.com/x').ok, true);
+  ['forms.gle/abc', 'javascript:alert(1)', 'ftp://x.com', 'https://a b.com', 'https://' + 'a'.repeat(300) + '.com'].forEach(u => assert.strictEqual(L.validateProgramForm(u).ok, false, u));
+});
+
+/* ===================== 2단계: 화면 계산 (주민번호 열 분리, 할 일) ===================== */
+console.log('2단계: 화면 — 주민번호 열 분리');
+test('★ 머리글의 "주민번호" 열을 떼어내 값은 따로 모으고, 행에서는 비운다 (행 번호·열 순서 유지)', () => {
+  const rows = J([AHEAD, A({ name: '분리갑', rrn: '900101-1234567' }), A({ name: '분리을', rrn: 9001011234567 }), A({ name: '빈칸갑', rrn: '' })]);
+  const r = G.splitRrnColumn(rows);
+  assert.strictEqual(r.count, 1);
+  assert.deepStrictEqual(J(r.rrns.map(x => x.rowNo)), [2, 3]);
+  assert.strictEqual(r.rrns[0].raw, '900101-1234567');
+  assert.strictEqual(r.rows.length, rows.length);
+  assert.strictEqual(r.rows[1].length, rows[1].length);
+  assert.ok(!JSON.stringify(r.rows).includes('900101'));
+  assert.strictEqual(G.rowsHaveRrn(r.rows), false);
+  assert.strictEqual(r.rows[1][1], '분리갑');
+});
+test('남긴 말에 "주민번호"라는 말이 있어도 그 열을 주민번호 열로 오해하지 않는다', () => {
+  const rows = J([AHEAD, A({ name: '말갑', memo: '주민번호는 다시 보낼게요', rrn: '900101-1234567' })]);
+  const r = G.splitRrnColumn(rows);
+  assert.strictEqual(r.count, 1);
+  assert.strictEqual(r.rows[1][11], '주민번호는 다시 보낼게요');
+});
+test('머리글 행이 없으면 아무것도 떼지 않는다', () => {
+  const r = G.splitRrnColumn([['a', 'b'], ['900101-1234567', 'x']]);
+  assert.strictEqual(r.count, 0);
+  assert.strictEqual(r.rrns.length, 0);
+});
+test('떼어낸 행은 서버가 그대로 읽을 수 있고, 행 번호가 일치한다', () => {
+  const rows = J([AHEAD, A({ name: '일치갑', rrn: '900101-1234567' })]);
+  const r = G.splitRrnColumn(rows);
+  const parsed = L.parseApplicationSheet(r.rows);
+  assert.strictEqual(parsed.rows[0].rowNo, r.rrns[0].rowNo);
+  assert.strictEqual(L.sanitizeLegacyRows(J(r.rows)).ok, true);
+});
+test('주민번호 열을 못 떼어내 값이 남아 있으면 서버가 거부한다 (이중 안전장치)', () => {
+  assert.strictEqual(L.sanitizeLegacyRows(J([AHEAD, A({ name: '남음갑', rrn: '900101-1234567' })])).ok, false);
+});
+
+console.log('2단계: 화면 — 할 일');
+const TD = (o) => Object.assign({ today: '2026-11-19', config: { refund_days: 3 }, sessions: [], enrollments: [] }, o);
+const E = (id, sid, o = {}) => Object.assign({ enroll_id: id, session_id: sid, pass: '합격', cancel_reason: '', m1_at: '', pay_at: '', ins_at: '', m2_at: '', attend: '' }, o);
+test('곧 시작하는 회차: 주민번호 → 보험 → 입금 → 환불 기한 → 1차 안내 순으로 우선순위를 낸다', () => {
+  const boot = TD({
+    sessions: [{ session_id: 'w9', program_id: 'w', n: 9, start: '2026-11-22', end: '2026-11-24' }],
+    enrollments: [E('a', 'w9', { ins_at: '2026-11-10', pay_at: '2026-11-10', m1_at: '2026-11-10' }), E('b', 'w9'), E('c', 'w9')],
+    rrnStatus: { a: 'ok', b: 'missing', c: 'check' }
+  });
+  const t = G.todoList(boot);
+  assert.deepStrictEqual(Array.from(t, x => x.kind), ['rrn', 'ins', 'pay', 'refund', 'm1']);
+  assert.deepStrictEqual(Array.from(t, x => x.n), [2, 2, 2, 3, 2]);
+  assert.strictEqual(t[0].sev, 'bad');
+  assert.strictEqual(t[3].sev, 'warn');
+});
+test('주민번호 상태 정보가 없으면 주민번호 항목은 만들지 않는다', () => {
+  const t = G.todoList(TD({ sessions: [{ session_id: 'w9', start: '2026-11-22', end: '2026-11-24' }], enrollments: [E('b', 'w9')] }));
+  assert.ok(!t.some(x => x.kind === 'rrn'));
+});
+test('취소·불합격은 할 일에서 빠지고, 멀리 있는 회차는 해당 기준 밖이면 나오지 않는다', () => {
+  const boot = TD({
+    sessions: [{ session_id: 'w9', start: '2026-11-24', end: '2026-11-26' }, { session_id: 'w10', start: '2027-01-10', end: '2027-01-12' }],
+    enrollments: [E('a', 'w9', { cancel_reason: '사정' }), E('b', 'w9', { ins_at: 'x', pay_at: 'x', m1_at: 'x' }), E('c', 'w10')],
+    rrnStatus: { b: 'ok', c: 'missing' }
+  });
+  assert.deepStrictEqual(J(G.todoList(boot)), []);
+});
+test('종료된 회차: 30일 안이면 참석 정리, 14일 안이면 참석자 중 만족도 미응답', () => {
+  const sessions = [{ session_id: 'w1', start: '2026-11-10', end: '2026-11-12' }];       // 7일 전에 종료
+  const boot = TD({ sessions, enrollments: [E('a', 'w1', { attend: '참석', sat_at: '' }), E('b', 'w1', { attend: '참석', sat_at: '2026-11-13' }), E('c', 'w1', { attend: '' }), E('d', 'w1', { attend: '불참', sat_at: '' })] });
+  const t = G.todoList(boot);
+  assert.deepStrictEqual(Array.from(t, x => [x.kind, x.n]).sort(), [['attend', 1], ['sat', 1]]);
+  const old = TD({ sessions: [{ session_id: 'w0', start: '2026-09-01', end: '2026-09-03' }], enrollments: [E('a', 'w0', { attend: '' })] });
+  assert.deepStrictEqual(J(G.todoList(old)), []);                                          // 50일이 지난 회차는 알리지 않는다
+});
+test('만족도 열(sat_at)이 아직 없는 데이터에서는 만족도 항목을 만들지 않는다', () => {
+  const boot = TD({ sessions: [{ session_id: 'w1', start: '2026-11-10', end: '2026-11-12' }], enrollments: [E('a', 'w1', { attend: '참석' })] });
+  assert.ok(!G.todoList(boot).some(x => x.kind === 'sat'));
 });
 
 console.log(`\n${passed}개 통과, ${failed}개 실패`);
