@@ -75,6 +75,16 @@ if (imported) {
   }
 }
 
+/* --xss=1: 이름·남긴 말·직업·회차 메모에 스크립트를 넣어 화면이 그대로 글자로만 보여 주는지 시험한다 */
+const xss = arg('xss') === '1';
+if (xss && imported) {
+  boot.people[0].name = '<img src=x onerror="window.__XSS=1">김엑스';
+  boot.people[0].job = '<script>window.__XSS=1<\/script>직업';
+  boot.people[0].area = '"><svg onload="window.__XSS=1">';
+  boot.enrollments[0].memo = '<img src=x onerror="window.__XSS=1"> 알레르기';
+  boot.enrollments[0].cancel_reason = '<b onmouseover="window.__XSS=1">사유</b>';
+  boot.sessions[0].note = '<b onmouseover="window.__XSS=1">메모</b>';
+}
 const imp = arg('imp');
 const preview = {
   screen: arg('screen') || 'dash', sid: arg('sid') || undefined,
@@ -83,10 +93,12 @@ const preview = {
   imp: imp ? { file: '신청자명단.xlsx', rows: [[]], rrnCols: 1, rowCount: 34, error: '', opts: { program_id: 'w', year: 2026, fee: 50000, cap: 7 }, preview: imp === 'preview' ? previewResult : null, result: null, ok: imp === 'preview', busy: false } : undefined
 };
 
+/* HTML 안의 <script> 에 JSON을 넣을 때 '<' 를 \\u003c 로 바꿔 </script> 같은 글자가 태그를 끊지 못하게 한다 */
+const safeJson = o => JSON.stringify(o).replace(/</g, '\\u003c');
 const mock = `
 (function () {
-  var DB = ${JSON.stringify(boot)};
-  var PREVIEW_RESULT = ${JSON.stringify(previewResult)};
+  var DB = ${safeJson(boot)};
+  var PREVIEW_RESULT = ${safeJson(previewResult)};
   var COLS = { m1: 'm1_at', pay: 'pay_at', ins: 'ins_at', m2: 'm2_at', attend: 'attend' };
   var c = function (o) { return JSON.parse(JSON.stringify(o)); };
   var find = function (id) { return DB.enrollments.filter(function (e) { return e.enroll_id === id; })[0]; };
@@ -127,10 +139,17 @@ const html = `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta n
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 ${read('Style.html')}</head><body>
 <div id="root"><div class="loading">불러오는 중…</div></div>
-<script>var APP_VERSION='미리보기'; window.__PREVIEW=${JSON.stringify(preview)}; window.onerror=function(m,s,l,c){document.title='ERR '+m+' @'+l+':'+c;};</script>
+<script>var APP_VERSION='미리보기'; window.__PREVIEW=${safeJson(preview)}; window.onerror=function(m,s,l,c){document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script>${mock}</script>
 ${read('Logic.html')}
 ${read('Client.html')}
+${xss ? `<script>setTimeout(function(){
+  var rendered = !!document.querySelector('.app');
+  var executed = !!window.__XSS;
+  var text = !rendered ? '시험 무효: 앱 화면이 그려지지 않았어요' : executed ? '스크립트 삽입 시험: 실패 (스크립트가 실행됨)' : '스크립트 삽입 시험: 통과 (앱이 그려졌고 스크립트는 실행되지 않음)';
+  var color = !rendered ? '#9a5b00' : executed ? '#b4390c' : '#17803d';
+  document.body.insertAdjacentHTML('afterbegin','<div style="position:fixed;left:0;right:0;bottom:0;z-index:99;padding:14px 20px;font:700 20px sans-serif;color:#fff;background:'+color+'">'+text+'</div>');
+},2500);</script>` : ''}
 </body></html>`;
 fs.writeFileSync(out, html, 'utf8');
 console.log('만든 파일: ' + out + ' (사람 ' + boot.people.length + '명, 참여 기록 ' + boot.enrollments.length + '건)');

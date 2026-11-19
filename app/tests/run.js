@@ -567,6 +567,85 @@ test('다른 칸(메일 등)에 주민번호가 섞여 있어도 거부', () => 
   rows[3][4] = '9001011234567';
   assert.strictEqual(L.sanitizeLegacyRows(J(rows)).ok, false);
 });
+/* ===================== 1단계: 접근 통제 (서버 함수마다 접속자 확인) ===================== */
+console.log('접근 통제: 모든 서버 함수는 맨 앞에서 접속자를 확인한다');
+const SERVER_FILES = ['Api.gs', 'Legacy.gs', 'Staff.gs', 'Code.gs', 'Setup.gs', 'SelfTest.gs'];
+/** 화면이 부를 수 있는 서버 함수(이름 끝에 _ 가 없는 함수)와 그 함수의 첫 실행문을 읽는다 */
+function publicFunctions() {
+  const out = [];
+  SERVER_FILES.forEach(f => {
+    const src = fs.readFileSync(path.join(appDir, f), 'utf8');
+    const re = /^function\s+([A-Za-z0-9]+)\s*\([^)]*\)\s*\{/gm;
+    let m;
+    while ((m = re.exec(src))) {
+      const rest = src.slice(m.index + m[0].length);
+      const end = rest.search(/\n(?:function|\/\*\*)\s/);
+      const body = end >= 0 ? rest.slice(0, end) : rest;
+      const first = body.split('\n').map(s => s.trim()).find(s => s && !s.startsWith('//') && !s.startsWith('/*') && !s.startsWith('*'));
+      out.push({ file: f, name: m[1], first: first || '', body });
+    }
+  });
+  return out;
+}
+const PUBLIC = publicFunctions();
+const NO_GUARD_OK = { doGet: '진입점(내부에서 접속자·운영진 확인)', include: '화면 틀 파일을 끼워 넣는 도우미(데이터 없음)', setup: '본문에서 소유자 이메일을 직접 확인' };
+const OWNER_ONLY = ['backupNow', 'previewLegacyImport', 'commitLegacyImport', 'undoLegacyImport', 'listStaff', 'addStaff', 'removeStaff', 'fixStaffSharing', 'getSystemStatus', 'runSelfTest'];
+
+test('서버 함수 목록을 읽었다', () => {
+  assert.ok(PUBLIC.length >= 20, '읽은 함수 수 ' + PUBLIC.length);
+});
+test('★ 예외 3개(doGet, include, setup)를 뺀 모든 서버 함수는 첫 실행문이 requireStaff_/requireOwner_ 이다', () => {
+  const bad = PUBLIC.filter(f => !NO_GUARD_OK[f.name] && !/require(Staff|Owner)_\(\)/.test(f.first));
+  assert.deepStrictEqual(bad.map(f => f.file + ':' + f.name), []);
+});
+test('★ 소유자 전용 함수는 모두 requireOwner_ 로 시작한다', () => {
+  OWNER_ONLY.forEach(n => {
+    const f = PUBLIC.find(x => x.name === n);
+    assert.ok(f, n + ' 함수를 찾지 못함');
+    assert.ok(/requireOwner_\(\)/.test(f.first), n + ' 의 첫 실행문: ' + f.first);
+  });
+});
+test('setup 은 소유자 이메일이 아니면 중단한다', () => {
+  const f = PUBLIC.find(x => x.name === 'setup');
+  assert.ok(/OWNER_EMAIL/.test(f.body) && /throw/.test(f.body));
+});
+test('새로 추가된 서버 함수가 목록에 빠지지 않도록, 예외·소유자 전용이 아닌 함수는 일반 운영진용으로 센다', () => {
+  const normal = PUBLIC.filter(f => !NO_GUARD_OK[f.name] && !OWNER_ONLY.includes(f.name)).map(f => f.name).sort();
+  assert.deepStrictEqual(normal, ['bulkSetStep', 'deleteSession', 'getBootstrap', 'saveSession', 'setStep', 'updateEnrollment', 'updatePerson'].sort());
+});
+
+console.log('접근 통제: 접속자별 동작 (구글 없이 가짜 접속자로 시험)');
+const guardCtx = vm.createContext({ console });
+vm.runInContext(['Schema.gs', 'Lib.gs', 'Api.gs'].map(f => fs.readFileSync(path.join(appDir, f), 'utf8')).join('\n'), guardCtx);
+let ME = '';
+const STAFF_ROWS = [
+  { email: 'owner@example.com', name: '소유자', role: 'owner', active: 'Y' },
+  { email: 'member@example.com', name: '운영진', role: 'member', active: 'Y' },
+  { email: 'gone@example.com', name: '삭제됨', role: 'member', active: 'N' }];
+guardCtx.currentEmail_ = () => ME;
+guardCtx.readTab_ = tab => (tab === 'Staff' ? STAFF_ROWS : []);
+const asUser = (email, fn) => { ME = email; return vm.runInContext(fn, guardCtx); };
+const code = e => (/\[([A-Z_]+)\]/.exec(e.message) || [])[1];
+test('로그인하지 않은 접속은 LOGIN_REQUIRED', () => {
+  assert.throws(() => asUser('', 'requireStaff_()'), e => code(e) === 'LOGIN_REQUIRED');
+});
+test('운영진 목록에 없는 사람은 NOT_STAFF', () => {
+  assert.throws(() => asUser('stranger@example.com', 'requireStaff_()'), e => code(e) === 'NOT_STAFF');
+});
+test('★ 삭제된(비활성) 운영진은 NOT_STAFF — 삭제하면 즉시 막힌다', () => {
+  assert.throws(() => asUser('gone@example.com', 'requireStaff_()'), e => code(e) === 'NOT_STAFF');
+  assert.throws(() => asUser('GONE@Example.com ', 'requireStaff_()'), e => code(e) === 'NOT_STAFF');
+});
+test('활성 운영진은 일반 기능은 되지만 소유자 전용은 OWNER_ONLY', () => {
+  assert.strictEqual(asUser('member@example.com', 'requireStaff_().owner'), false);
+  assert.throws(() => asUser('member@example.com', 'requireOwner_()'), e => code(e) === 'OWNER_ONLY');
+  assert.throws(() => asUser(' Member@Example.com ', 'requireOwner_()'), e => code(e) === 'OWNER_ONLY');
+});
+test('소유자는 일반·소유자 전용 모두 통과', () => {
+  assert.strictEqual(asUser('owner@example.com', 'requireStaff_().owner'), true);
+  assert.doesNotThrow(() => asUser('OWNER@example.com', 'requireOwner_()'));
+});
+
 /* ===================== 1단계: 운영진 관리 ===================== */
 console.log('운영진 관리: 입력 검사');
 test('이메일을 소문자로 정리하고 이름이 없으면 이메일 앞부분을 쓴다', () => {
