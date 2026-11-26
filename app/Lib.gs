@@ -242,7 +242,7 @@ function isDuplicatePerson(people, personId, name, phone) {
   });
 }
 
-/** 회차 입력을 검사한다. 새 회차면 session_id를 만들어 돌려준다 (예: 일해보기 2회차 → w2) */
+/** 회차 입력을 검사한다. 새 회차면 session_id를 만들어 돌려준다 (예: 일해보자 2회차 → w2) */
 function validateSession(input, existing) {
   var errors = {}, clean = {};
   var fields = existing ? ['start', 'end', 'fee', 'cap', 'note'] : ['program_id', 'n', 'start', 'end', 'fee', 'cap', 'note'];

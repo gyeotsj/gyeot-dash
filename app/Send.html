@@ -88,7 +88,7 @@ function sendHtml() {
       '<div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted" style="font-size:12.5px" id="cnt">' + pv.info + '</span><button class="btn sm" data-act="sd-copy-msg">' + IC.copy + ' 문구 복사</button></div>' +
       '<div class="muted" style="font-size:12px;margin-top:4px">복사되는 문구는 미리보기에 나온 첫 번째 대상자 기준이에요. 사람마다 다르게 보내려면 오른쪽 목록의 사람별 복사 버튼을 쓰세요.</div>' +
       '<div class="sec">이 문구 저장하기</div><div class="row" style="gap:8px">' +
-      '<input type="text" id="sv-name" placeholder="저장 이름 (예: 일해보기 최종 안내)" maxlength="60" value="' + esc(o.saveName) + '" style="flex:1;min-width:190px">' +
+      '<input type="text" id="sv-name" placeholder="저장 이름 (예: 일해보자 최종 안내)" maxlength="60" value="' + esc(o.saveName) + '" style="flex:1;min-width:190px">' +
       '<select id="sv-stage">' + stageOpts(saveStage) + '</select>' +
       '<select id="sv-prog">' + Object.keys(PROG_LABEL).map(function (k) { return '<option value="' + k + '"' + (k === saveProg ? ' selected' : '') + '>' + (k === 'all' ? '모든 프로그램 공통' : esc(PROG_LABEL[k])) + '</option>'; }).join('') + '</select>' +
       '<button class="btn pri" data-act="sd-save"' + (o.busy ? ' disabled' : '') + '>' + IC.check.replace('<svg', '<svg width="16" height="16"') + ' 저장</button></div>' +

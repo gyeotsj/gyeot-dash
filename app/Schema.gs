@@ -11,7 +11,7 @@ const OWNER_EMAIL = 'gyeot.sj@gmail.com';
 
 /** 문구 단계: 1차 안내 / 입금 요청 / 최종 안내 / 만족도 요청 / 기타 */
 const STAGES = ['m1', 'pay', 'm2', 'sat', 'etc'];
-/** 프로그램: 일해보기 / 살아보기 / 자라보기 */
+/** 프로그램: 일해보자 / 살아보기 / 자라보기 */
 const PROGRAM_IDS = ['w', 'l', 'g'];
 
 /** 운영 DB 스프레드시트의 탭 */
@@ -95,7 +95,7 @@ const RRN_SCHEMA = {
 /* ---------- 초기 데이터 (setup()이 비어 있을 때만 채움) ---------- */
 
 const SEED_PROGRAMS = [
-  { program_id: 'w', name: '일해보기' },
+  { program_id: 'w', name: '일해보자' },
   { program_id: 'l', name: '살아보기' },
   { program_id: 'g', name: '자라보기' }
 ];
