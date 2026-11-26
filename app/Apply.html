@@ -1,0 +1,350 @@
+<script>
+/**
+ * 신청 엑셀 업로드 화면과 주민번호 입력·수정 창. (Client.html 의 도우미와 Logic.html 의 계산을 쓴다)
+ *
+ * 주민번호 규칙 (DEV_PLAN_STAGE2.md 2장)
+ *  - 파일의 주민번호 열은 읽자마자 splitRrnColumn 으로 떼어 내 이 브라우저의 메모리(S.up.mem, S.up.inputs)에만 둔다.
+ *  - 화면(HTML)에는 어떤 경우에도 번호 값을 적지 않는다: 입력칸은 가려진 칸이고, 입력이 끝나면 칸을 비운 뒤 "입력함"만 표시한다.
+ *  - 미리보기 요청에는 번호가 없다. 등록 요청에만 별도 칸(rrns)으로 싣고, 끝나면 메모리에서 지운다.
+ */
+
+function newUp() {
+  return { file: '', rows: null, rowCount: 0, rrnCols: 0, mem: {}, error: '', programId: 'w', applyAttend: true, sessionMap: {}, preview: null, inputs: {}, ok: false, busy: false, result: null };
+}
+var UPL = { items: null, missingTab: false, loading: false, error: '' };
+
+function sessLabel(sid) {
+  var s = X.session[sid];
+  return s ? progName(s.program_id) + ' ' + s.n + '회차 · ' + fmtRange(s.start, s.end) : String(sid || '');
+}
+
+/* ===================== 화면 ===================== */
+function applyHtml() {
+  if (!S.up) S.up = newUp();
+  if (UPL.items === null && !UPL.loading && !UPL.error) setTimeout(loadUploads, 0);
+  var up = S.up, b = S.boot;
+  var head = '<div class="top"><div><h1>신청 엑셀 업로드</h1><div class="sub">홈페이지에서 내려받은 신청 엑셀을 올리면 합격자를 참여 기록으로 등록하고, 이미 있는 사람은 빈 칸만 채워요.</div></div></div>';
+  var body;
+  if (up.result) body = applyResultHtml();
+  else {
+    var pv = up.preview;
+    body = '<div class="stack">' + applyFileCard() + applyOptCard() + (pv ? applyPreviewCard() : '') + (pv && pv.ok ? applyRrnCard() + applyCommitCard() : '') + '</div>';
+  }
+  return head + body + '<div style="margin-top:18px">' + uploadsCardHtml() + '</div>';
+}
+
+function applyFileCard() {
+  var up = S.up, got = up.rows != null;
+  var memCount = Object.keys(up.mem).length;
+  return '<div class="card card-b"><b>1. 신청 엑셀 선택</b><p class="muted" style="margin:6px 0 12px">홈페이지에서 내려받은 신청 엑셀(.xlsx 또는 .csv)을 고르세요. 파일은 이 컴퓨터의 브라우저가 읽어요. <b>주민번호 열은 따로 떼어 메모리에만</b> 두고 화면에는 보여 주지 않아요.</p>' +
+    '<div class="row"><input type="file" id="ap-file" accept=".xlsx,.xls,.csv"></div>' +
+    (up.error ? '<div class="err" style="margin-top:8px">' + esc(up.error) + '</div>' : '') +
+    (got ? '<div class="ban" style="margin:12px 0 0">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>' + esc(up.file) + '</b>을 읽었어요 (' + up.rowCount + '행).<br>' +
+      (up.rrnCols ? '주민번호 열 <b>' + up.rrnCols + '개</b>를 떼어 냈고, 번호가 적힌 행은 <b>' + memCount + '개</b>예요. 번호는 등록할 때만 서버로 가고 화면에는 표시되지 않아요.'
+        : '<span class="warn-text">주민번호 열을 찾지 못했어요.</span> 번호 없이 등록되고, 등록한 뒤 앱에서 하나씩 입력할 수 있어요.') + '</div></div>' : '') + '</div>';
+}
+
+function applyOptCard() {
+  var up = S.up, b = S.boot, got = up.rows != null;
+  return '<div class="card card-b" style="' + (got ? '' : 'opacity:.5;pointer-events:none') + '"><b>2. 프로그램 선택</b><p class="muted" style="margin:6px 0 12px">이 엑셀이 어느 프로그램의 신청자인지 골라요. 회차는 엑셀의 "신청하시는 회차" 칸으로 찾고, 회차는 <b>회차 관리에서 먼저 만들어 두어야</b> 해요.</p>' +
+    '<div class="field-grid"><div><label class="f">프로그램</label><select id="ap-prog">' + b.programs.map(function (p) { return '<option value="' + esc(p.program_id) + '"' + (p.program_id === up.programId ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></div></div>' +
+    '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input type="checkbox" id="ap-attend" ' + (up.applyAttend ? 'checked' : '') + ' style="margin-top:3px"> <span>엑셀의 "참석 여부"를 이미 시작한 회차의 <b>빈 칸에만</b> 반영해요 (참석·불참만, 이미 입력한 값은 덮어쓰지 않아요).</span></label>' +
+    '<div class="row" style="margin-top:14px"><button class="btn pri" data-act="ap-preview"' + (up.busy ? ' disabled' : '') + '>미리보기</button><span class="muted" style="font-size:12.5px">미리보기는 저장하지 않아요.</span></div></div>';
+}
+
+function applyPreviewCard() {
+  var up = S.up, pv = up.preview, s = pv.summary || {};
+  var chip = function (label, n, cls) { return '<span class="chip ' + cls + '">' + label + ' ' + n + '</span>'; };
+  var cards = '<div class="pill-row" style="margin:10px 0">' +
+    chip('신규', s.new || 0, 'ok') + chip('이미 등록됨 · 보충', s.existing || 0, 'pri') + chip('취소 상태로 등록', s.cancelled_new || 0, 'warn') + chip('불합격 제외', s.rejected || 0, '') +
+    (s.needs_session ? chip('회차 확인 필요', s.needs_session, 'bad') : '') + (s.duplicate_in_file ? chip('파일 안 중복', s.duplicate_in_file, '') : '') + (s.error ? chip('읽을 수 없음', s.error, 'bad') : '') + '</div>';
+  var fills = Object.keys(pv.fillsByField || {}).map(function (k) { return esc(FILL_LABELS[k] || k) + ' ' + pv.fillsByField[k] + '칸'; });
+  var fillNote = (fills.length ? '<div class="note" style="margin-bottom:10px">이미 등록된 사람의 빈 칸을 채워요: ' + fills.join(' · ') + '</div>' : '') +
+    (pv.sessionNotes ? '<div class="note" style="margin-bottom:10px">회차 메모에 "테마: …"를 덧붙이는 회차 ' + pv.sessionNotes + '개</div>' : '') +
+    (s.consentChanged ? '<div class="note" style="margin-bottom:10px">이미 입력된 동의 값이 엑셀과 달라 <b>더 제한적인 값(미동의)</b>으로 바뀌는 칸 ' + s.consentChanged + '개</div>' : '');
+
+  var sessions = b2sessions(up.programId);
+  var rows = (pv.rows || []).slice(0, 300).map(function (r) {
+    var d = DECISION_TEXT[r.decision] || [r.decision, ''];
+    var sess = r.session_id ? esc(sessLabel(r.session_id)) : '–';
+    if (r.decision === 'needs_session') {
+      sess = '<select data-act="ap-sess" data-row="' + esc(r.rowNo) + '"><option value="">— 이 행은 제외 —</option>' +
+        sessions.map(function (x) { return '<option value="' + esc(x.session_id) + '"' + (up.sessionMap[r.rowNo] === x.session_id ? ' selected' : '') + '>' + esc(x.n + '회차 · ' + fmtRange(x.start, x.end)) + '</option>'; }).join('') + '</select>' +
+        (r.roundText ? '<div class="muted" style="font-size:12px">엑셀: ' + esc(r.roundText) + '</div>' : '');
+    }
+    return '<tr><td class="nw muted">' + esc(r.rowNo) + '행</td><td class="nw"><b>' + esc(r.name) + '</b></td><td><span class="chip ' + d[1] + '">' + esc(d[0]) + '</span>' + (r.reason ? ' <span class="muted" style="font-size:12px">' + esc(r.reason) + '</span>' : '') + '</td><td>' + sess + '</td></tr>';
+  }).join('');
+  return '<div class="card card-b"><b>3. 미리보기 결과</b>' +
+    (pv.errors.length ? '<div class="ban warn" style="margin:12px 0 0">' + IC.warn + '<div class="sp"><b>등록할 수 없어요.</b><ul style="margin:6px 0 0;padding-left:18px">' + pv.errors.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul></div></div>' : '') +
+    cards + fillNote +
+    '<div class="scroll"><table class="tbl"><thead><tr><th>행</th><th>이름</th><th>판정</th><th>회차</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    ((pv.rows || []).length > 300 ? '<div class="muted" style="margin-top:6px;font-size:12.5px">300행까지 표시했어요.</div>' : '') +
+    (pv.warnings.length ? '<div style="margin-top:12px"><b style="font-size:13px">확인할 점 ' + pv.warnings.length + '개</b><ul style="margin:6px 0 0;padding-left:18px;color:var(--ink2)">' + pv.warnings.slice(0, 40).map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul></div>' : '') + '</div>';
+}
+function b2sessions(programId) {
+  return S.boot.sessions.filter(function (x) { return x.program_id === programId; }).sort(function (a, c) { return Number(a.n) - Number(c.n); });
+}
+
+/** 번호 문제 표: 정상이 아닌 번호만 보여 준다. 입력한 값은 메모리에만 있고 화면에는 "입력함"으로만 표시한다. */
+function apEffRaw(row) {
+  var inp = S.up.inputs[row];
+  return inp && inp.rrn !== undefined && inp.rrn !== '' ? inp.rrn : S.up.mem[row];
+}
+function apRrnStatusHtml(r) {
+  var k = classifyRrn(apEffRaw(r.rowNo), r.gender, r.birth_year), typed = S.up.inputs[r.rowNo] && S.up.inputs[r.rowNo].rrn;
+  if (k.state === 'ok') return '<span class="chip ok">정상' + (typed ? ' · 입력함' : '') + '</span>';
+  if (k.state === 'empty') return '<span class="chip warn">비어 있음</span>';
+  if (k.state === 'mismatch') return '<span class="chip warn">신청서와 달라요</span> <span class="muted" style="font-size:12px">' + esc(rrnCodeText(k.codes)) + '</span>' + (typed ? ' <span class="chip">입력함</span>' : '');
+  return '<span class="chip bad">형식 오류</span> <span class="muted" style="font-size:12px">' + esc(rrnCodeText(k.codes)) + '</span>' + (typed ? ' <span class="chip">입력함</span>' : '');
+}
+function apRrnForceHtml(r) {
+  var k = classifyRrn(apEffRaw(r.rowNo), r.gender, r.birth_year);
+  if (k.state !== 'mismatch') return '';
+  var on = S.up.inputs[r.rowNo] && S.up.inputs[r.rowNo].confirm;
+  return '<label style="display:flex;gap:6px;align-items:center;white-space:nowrap"><input type="checkbox" data-act="ap-force" data-row="' + esc(r.rowNo) + '" ' + (on ? 'checked' : '') + '> 그대로 저장</label>';
+}
+function apRrnSummaryText() {
+  var c = buildRrnPayload(S.up.preview.rows, S.up.mem, S.up.inputs).counts;
+  return '저장할 번호 <b>' + (c.ok + c.forced) + '건</b>' + (c.forced ? ' (그대로 저장 ' + c.forced + '건 포함)' : '') +
+    ' · 신청서와 달라 확인이 필요한 번호 ' + c.mismatch + '건 · 형식 오류 ' + c.invalid + '건 · 비어 있음 ' + c.empty + '건';
+}
+function applyRrnCard() {
+  var up = S.up, pv = up.preview;
+  var elig = (pv.rows || []).filter(function (r) { return r.rrnEligible; });
+  if (!elig.length) {
+    return '<div class="card card-b"><b>4. 주민번호</b><p class="muted" style="margin:6px 0 0">이번 업로드에는 주민번호를 저장할 대상(새로 등록하는 합격자 중 아직 끝나지 않은 회차)이 없어요.</p></div>';
+  }
+  var show = elig.filter(function (r) { return classifyRrn(apEffRaw(r.rowNo), r.gender, r.birth_year).state !== 'ok' || (up.inputs[r.rowNo] && up.inputs[r.rowNo].rrn); });
+  var rows = show.map(function (r) {
+    var typed = up.inputs[r.rowNo] && up.inputs[r.rowNo].rrn;
+    return '<tr data-rrn-tr="' + esc(r.rowNo) + '"><td class="nw muted">' + esc(r.rowNo) + '행</td><td class="nw"><b>' + esc(r.name) + '</b><div class="muted" style="font-size:12px">' + esc(personSub({ gender: r.gender, birth_year: r.birth_year })) + '</div></td>' +
+      '<td data-rrn-status="' + esc(r.rowNo) + '">' + apRrnStatusHtml(r) + '</td>' +
+      '<td class="nw"><input type="password" autocomplete="off" data-lpignore="true" spellcheck="false" maxlength="24" data-rrn-row="' + esc(r.rowNo) + '" placeholder="' + (typed ? '입력함 (다시 입력하면 바꿔요)' : '바르게 고쳐 입력') + '" style="width:210px"> ' +
+      '<button type="button" class="btn sm ghost" data-act="ap-peek" data-row="' + esc(r.rowNo) + '">보기</button></td>' +
+      '<td data-rrn-force="' + esc(r.rowNo) + '">' + apRrnForceHtml(r) + '</td></tr>';
+  }).join('');
+  return '<div class="card card-b" id="ap-rrn-card"><b>4. 주민번호 확인</b>' +
+    '<p class="muted" style="margin:6px 0 10px">신청서의 성별·출생연도와 맞추어 확인했어요. <b>정상인 번호는 아래에 나오지 않고 그대로 저장돼요.</b> 문제가 있는 번호는 여기서 고쳐 입력하거나, 나중에 앱에서 입력할 수 있어요.</p>' +
+    '<div class="note" id="ap-rrn-sum" style="margin-bottom:10px">' + apRrnSummaryText() + '</div>' +
+    (show.length ? '<div class="scroll"><table class="tbl"><thead><tr><th>행</th><th>이름</th><th>상태</th><th>고쳐 입력 (가려져요)</th><th>신청서와 달라도</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="muted" style="margin-top:8px;font-size:12.5px">입력한 번호는 칸에서 바로 지워지고 "입력함"으로만 표시돼요. 저장하지 않고 넘어가도 참여 기록은 등록되고, 그 사람은 "번호 없음"으로 보여요.</div>'
+      : '<div class="ban" style="margin:0">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>모든 번호가 정상이에요.</b> 별도로 확인할 번호가 없어요.</div></div>') + '</div>';
+}
+
+function applyCommitCard() {
+  var up = S.up, pv = up.preview, s = pv.summary || {};
+  var any = (s.new || 0) + (s.existing || 0) + (s.cancelled_new || 0) > 0;
+  var skip = (s.needs_session || 0) + (s.error || 0);
+  return '<div class="card card-b"><b>5. 등록</b>' +
+    (skip ? '<div class="ban warn" style="margin:12px 0 0">' + IC.warn + '<div class="sp">회차를 정하지 못했거나 읽을 수 없는 <b>' + skip + '행은 등록하지 않아요.</b> 위 표에서 회차를 고르면 함께 등록돼요.</div></div>' : '') +
+    '<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="ap-ok" ' + (up.ok ? 'checked' : '') + ' style="margin-top:3px"> <span>미리보기 내용이 맞아요. 등록한 뒤에도 "업로드 기록"에서 이 업로드를 되돌릴 수 있어요.</span></label>' +
+    '<div class="row" style="margin-top:12px"><button class="btn pri" data-act="ap-commit"' + (!up.ok || up.busy || !any ? ' disabled' : '') + '>등록</button>' + (any ? '' : '<span class="muted">등록할 행이 없어요.</span>') + '</div></div></div>';
+}
+
+function applyResultHtml() {
+  var up = S.up, r = up.result, c = r.counts, s = r.summary, rc = r.rrn.counts;
+  var nameBy = {}; ((up.preview && up.preview.rows) || []).forEach(function (x) { nameBy[x.rowNo] = x.name; });
+  var bad = (r.rrn.status || []).filter(function (x) { return x.state === 'invalid' || x.state === 'mismatch' || x.state === 'missing'; });
+  var badNote = bad.length
+    ? '<div class="ban warn" style="margin:12px 0 0">' + IC.warn + '<div class="sp"><b>번호가 저장되지 않은 사람 ' + bad.length + '명</b>: ' + bad.map(function (x) { return esc(nameBy[x.rowNo] || ('표의 ' + x.rowNo + '행')); }).join(', ') +
+      '.<br>참여 기록은 등록됐어요. 회차 상세의 "주민번호" 칸에서 입력하면 돼요.</div></div>' : '';
+  return '<div class="ban">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>등록을 마쳤어요.</b><br>새 참여 기록 ' + c.newEnrollments + '건 (새로 만든 사람 ' + c.newPeople + '명) · 이미 등록된 ' + s.existing + '명의 빈 ' + c.filledCells + '칸 보충' +
+    (c.sessionNotes ? ' · 회차 메모 ' + c.sessionNotes + '곳' : '') + '<br>주민번호 ' + rc.saved + '건 저장</div></div>' + badNote +
+    ((r.warnings || []).length ? '<div class="card card-b"><b style="font-size:13px">확인할 점 ' + r.warnings.length + '개</b><ul style="margin:6px 0 0;padding-left:18px;color:var(--ink2)">' + r.warnings.slice(0, 40).map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul></div>' : '') +
+    '<div class="card card-b" style="margin-top:12px"><b>다음에 하실 일</b><ol class="step-list"><li>회차 상세에서 참여 인원과 주민번호 상태를 확인하세요.</li><li>번호가 저장되지 않은 사람은 회차 상세에서 입력해 주세요.</li><li>잘못 올렸다면 아래 "업로드 기록"에서 이 업로드를 되돌릴 수 있어요.</li><li>다 확인했으면 내려받은 신청 엑셀 파일은 컴퓨터에서 지워 주세요 (주민번호가 들어 있어요).</li></ol>' +
+    '<div class="row" style="margin-top:12px"><button class="btn pri" data-act="nav" data-to="sess">회차 상세로</button><button class="btn" data-act="ap-again">다른 파일 올리기</button></div></div>';
+}
+
+/* ===================== 업로드 기록과 되돌리기 ===================== */
+function uploadsCardHtml() {
+  var head = '<div class="card"><div class="card-h"><h2>업로드 기록</h2><div class="sp"></div><button class="btn sm ghost" data-act="ap-reload">새로 고침</button></div>';
+  if (UPL.error) return head + '<div class="card-b"><div class="err">' + esc(UPL.error) + '</div></div></div>';
+  if (UPL.items === null) return head + '<div class="card-b muted">불러오는 중…</div></div>';
+  if (UPL.missingTab) return head + '<div class="card-b"><div class="ban warn" style="margin:0">' + IC.warn + '<div class="sp"><b>업로드 기록 탭이 아직 없어요.</b> 소유자가 Apps Script 편집기에서 setup 을 한 번 실행해 주세요.</div></div></div></div>';
+  if (!UPL.items.length) return head + '<div class="card-b muted">아직 업로드한 기록이 없어요.</div></div>';
+  var rows = UPL.items.map(function (u) {
+    var sess = String(u.sessions || '').split(',').filter(String).map(function (id) { return esc(sessLabel(id)); }).join('<br>') || '–';
+    return '<tr><td class="nw">' + esc(String(u.at).slice(0, 16)) + '</td><td class="muted nw">' + esc(u.by) + '</td><td>' + pchip(u.program_id) + '</td><td>' + sess + '</td>' +
+      '<td class="nw">신규 <b>' + esc(u.n_new) + '</b> · 보충 <b>' + esc(u.n_fill) + '</b> · 제외 ' + esc(u.n_skip) + '</td>' +
+      '<td>' + (u.undone_at ? '<span class="chip">되돌림 ' + esc(String(u.undone_at).slice(0, 10)) + '</span>' : '<span class="chip ok">적용 중</span>') + '</td>' +
+      '<td class="nw" style="text-align:right">' + (u.undone_at ? '' : '<button class="btn sm" data-act="ap-undo" data-id="' + esc(u.upload_id) + '">되돌리기…</button>') + '</td></tr>';
+  }).join('');
+  return head + '<div class="scroll"><table class="tbl" style="margin-top:8px"><thead><tr><th>올린 때</th><th>올린 사람</th><th>프로그램</th><th>회차</th><th>결과</th><th>상태</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+}
+function loadUploads() {
+  UPL.loading = true; UPL.error = '';
+  return api('listUploads').then(function (r) { UPL.loading = false; UPL.items = r.items; UPL.missingTab = r.missingTab; if (S.screen === 'apply') render(); })
+    .catch(function (err) { UPL.loading = false; UPL.error = err.msg; if (S.screen === 'apply') render(); });
+}
+function undoUploadConfirm(id) {
+  api('previewUndoUpload', id).then(function (p) {
+    var c = p.counts;
+    openModal({
+      title: '업로드 되돌리기',
+      html: '<p>이 업로드가 만든 <b>참여 기록 ' + c.enrollments + '건, 사람 ' + c.people + '명' + (c.rrn == null ? '' : ', 주민번호 ' + c.rrn + '건') + '</b>을 지우고, 채웠던 <b>' + c.cells + '칸</b>을 비워요' + (c.notes ? ' (회차 메모 ' + c.notes + '곳 포함)' : '') + '.</p>' +
+        '<p><b>이후 수정한 내용은 사라져요.</b> 그 참여 기록에 체크하거나 고친 내용도 함께 지워져요.</p>' +
+        (c.skippedCells ? '<p class="muted">업로드 뒤에 직접 고친 칸 ' + c.skippedCells + '개는 건드리지 않아요.</p>' : '') +
+        (c.keptPeople ? '<p class="muted">다른 참여 기록이 있는 사람 ' + c.keptPeople + '명은 지우지 않아요.</p>' : ''),
+      yes: '되돌리기', danger: true
+    }, function () {
+      api('undoUpload', id).then(function (r) {
+        toast('되돌렸어요 (참여 ' + r.enrollments + ' · 사람 ' + r.people + ' · 칸 ' + r.cells + ')');
+        return Promise.all([loadBoot(), loadUploads()]);
+      }).catch(function (err) { fail(err); loadBoot(); loadUploads(); });     // 일부만 되돌려졌어도 지금 상태를 다시 보여 준다
+    });
+  }).catch(fail);
+}
+
+/* ===================== 파일 읽기·미리보기·등록 ===================== */
+function apReadFile(file) {
+  S.up = newUp();
+  if (!file) { render(); return; }
+  S.up.file = file.name;
+  if (typeof XLSX === 'undefined') { S.up.error = '엑셀 읽기 도구를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.'; render(); return; }
+  var isCsv = /\.csv$/i.test(file.name), rd = new FileReader();
+  rd.onload = function () {
+    try {
+      var wb = isCsv ? XLSX.read(String(rd.result).replace(/^﻿/, ''), { type: 'string', raw: true }) : XLSX.read(rd.result, { type: 'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+      var sp = splitRrnColumn(raw);                         // 주민번호 열을 떼어 낸다 (이 뒤로 raw 는 쓰지 않는다)
+      raw = null;
+      var rows = trimRows(sp.rows);
+      if (rowsHaveRrn(rows)) {
+        S.up.error = '주민번호처럼 보이는 값이 다른 칸에도 있어서 중단했어요. 아무것도 전송하지 않았어요. 엑셀의 주민번호 열 이름이 "주민번호"인지 확인해 주세요.';
+      } else {
+        S.up.rows = rows; S.up.rowCount = rows.length; S.up.rrnCols = sp.count;
+        sp.rrns.forEach(function (x) { S.up.mem[x.rowNo] = x.raw; });
+        if (!rows.some(function (r) { return (r || []).some(function (c) { return String(c).trim() === '이름'; }); })) S.up.error = '"이름" 열이 있는 머리글 행을 찾지 못했어요. 신청 엑셀이 맞는지 확인해 주세요.';
+      }
+    } catch (e) { S.up.error = '엑셀을 읽지 못했어요: ' + e.message; }
+    render();
+  };
+  rd.onerror = function () { S.up.error = '파일을 읽지 못했어요.'; render(); };
+  if (isCsv) rd.readAsText(file, 'UTF-8'); else rd.readAsArrayBuffer(file);
+}
+function apPayload() { return { rows: S.up.rows, programId: S.up.programId, sessionMap: S.up.sessionMap, applyAttend: S.up.applyAttend }; }
+function apPreview() {
+  var up = S.up; if (up.busy || !up.rows) return;
+  up.busy = true; up.error = ''; up.ok = false; render();
+  api('previewApplications', apPayload()).then(function (pv) { up.busy = false; up.preview = pv; render(); })
+    .catch(function (err) { up.busy = false; up.preview = null; up.error = err.msg; render(); });
+}
+function apCommit() {
+  var up = S.up; if (up.busy || !up.preview || !up.ok) return;
+  var pl = buildRrnPayload(up.preview.rows, up.mem, up.inputs);
+  var req = apPayload(); req.rrns = pl.items;
+  up.busy = true; render();
+  api('commitApplications', req).then(function (res) {
+    up.busy = false; up.result = res;
+    up.mem = {}; up.inputs = {}; up.rows = null; req.rrns = null; req = null;     // 번호는 등록이 끝나면 메모리에서도 지운다
+    UPL.items = null; UPL.error = '';
+    return Promise.all([loadBoot(), loadUploads()]);
+  }).catch(function (err) { up.busy = false; up.error = err.msg; render(); toast(err.msg); });
+}
+
+/* 번호 칸 한 행만 다시 그린다 (다른 칸에 입력 중인 내용을 지우지 않으려고 전체를 다시 그리지 않는다) */
+function apUpdateRrnRow(row) {
+  var r = (S.up.preview.rows || []).filter(function (x) { return x.rowNo === row; })[0]; if (!r) return;
+  var st = document.querySelector('[data-rrn-status="' + row + '"]'), fc = document.querySelector('[data-rrn-force="' + row + '"]'), sum = document.getElementById('ap-rrn-sum');
+  if (st) st.innerHTML = apRrnStatusHtml(r);
+  if (fc) fc.innerHTML = apRrnForceHtml(r);
+  if (sum) sum.innerHTML = apRrnSummaryText();
+  var inp = document.querySelector('input[data-rrn-row="' + row + '"]');
+  if (inp) inp.placeholder = '입력함 (다시 입력하면 바꿔요)';
+}
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!t || t.disabled) return;
+  var a = t.getAttribute('data-act'), d = t.dataset;
+  switch (a) {
+    case 'ap-preview': apPreview(); break;
+    case 'ap-commit': apCommit(); break;
+    case 'ap-again': S.up = newUp(); render(); break;
+    case 'ap-reload': UPL.items = null; UPL.error = ''; loadUploads(); render(); break;
+    case 'ap-undo': undoUploadConfirm(d.id); break;
+    case 'ap-peek': {      // 보기: 입력 중인 칸의 가림을 잠깐 푼다 (다시 누르면 가림)
+      var el = document.querySelector('input[data-rrn-row="' + d.row + '"]');
+      if (el) el.type = el.type === 'password' ? 'text' : 'password';
+      break;
+    }
+    case 'rrn-edit': openRrnModal(d.eid); break;
+    case 'rrn-peek': { var m = document.getElementById('rrn-in'); if (m) m.type = m.type === 'password' ? 'text' : 'password'; break; }
+  }
+});
+document.addEventListener('change', function (ev) {
+  var el = ev.target; if (!el || !el.getAttribute) return;
+  if (el.id === 'ap-file') { apReadFile(el.files && el.files[0]); return; }
+  if (el.id === 'ap-prog') { S.up.programId = el.value; S.up.sessionMap = {}; S.up.preview = null; S.up.ok = false; render(); return; }
+  if (el.id === 'ap-attend') { S.up.applyAttend = el.checked; S.up.preview = null; S.up.ok = false; render(); return; }
+  if (el.id === 'ap-ok') { S.up.ok = el.checked; var b = document.querySelector('[data-act="ap-commit"]'); if (b) b.disabled = !el.checked || S.up.busy; return; }
+  var act = el.getAttribute('data-act');
+  if (act === 'ap-sess') {
+    var row = Number(el.getAttribute('data-row'));
+    if (el.value) S.up.sessionMap[row] = el.value; else delete S.up.sessionMap[row];
+    apPreview(); return;
+  }
+  if (act === 'ap-force') {
+    var r2 = Number(el.getAttribute('data-row'));
+    S.up.inputs[r2] = S.up.inputs[r2] || {}; S.up.inputs[r2].confirm = el.checked;
+    var sum = document.getElementById('ap-rrn-sum'); if (sum) sum.innerHTML = apRrnSummaryText();
+    return;
+  }
+  if (el.hasAttribute('data-rrn-row')) {
+    var row2 = Number(el.getAttribute('data-rrn-row')), v = el.value;
+    el.value = ''; el.type = 'password';                       // 입력한 값은 칸에서 바로 지운다
+    if (String(v).trim() === '') return;
+    S.up.inputs[row2] = { rrn: v, confirm: false };
+    apUpdateRrnRow(row2);
+  }
+});
+
+/* ===================== 주민번호 입력·수정 (등록한 뒤, 참여 기록 하나) ===================== */
+function rrnCell(e) {
+  var map = S.boot.rrnStatus;
+  if (e.ins_at && !isCancelled(e)) return '<span class="muted" style="font-size:12.5px">보험 완료</span>';
+  if (!map || map[e.enroll_id] === undefined) return '<span class="dash">–</span>';
+  var st = map[e.enroll_id];
+  var chip = st === 'ok' ? '<span class="chip ok">보관 중</span>' : st === 'check' ? '<span class="chip bad">확인 필요</span>' : '<span class="chip warn">없음</span>';
+  return chip + ' <button type="button" class="btn sm ghost" data-act="rrn-edit" data-eid="' + esc(e.enroll_id) + '">' + (st === 'missing' ? '입력' : '수정') + '</button>';
+}
+
+function openRrnModal(eid) {
+  var e = enrOf(eid); if (!e) return;
+  var p = X.person[e.person_id] || {};
+  var st = (S.boot.rrnStatus || {})[eid];
+  openModal({
+    title: '주민번호 ' + (st === 'missing' ? '입력' : '수정'),
+    html: '<p><b>' + esc(p.name) + '</b> · ' + esc(personSub({ gender: p.gender, birth_year: p.birth_year }) || '성별·출생연도 정보 없음') + ' <span class="muted">(신청서 기준)</span></p>' +
+      '<p class="muted">저장된 번호는 어디에도 표시되지 않아요. 새로 입력하면 이전 번호를 바꿔요. 보험 가입을 마치거나 취소하면 자동으로 지워져요.</p>' +
+      '<div class="row" style="margin-top:8px"><input type="password" id="rrn-in" autocomplete="off" data-lpignore="true" spellcheck="false" maxlength="24" placeholder="숫자 13자리 (하이픈은 있어도 없어도 돼요)" style="flex:1;min-width:0"> ' +
+      '<button type="button" class="btn sm ghost" data-act="rrn-peek">보기</button></div>',
+    yes: '저장',
+    collect: function () {
+      var el = document.getElementById('rrn-in'), v = el ? el.value : '';
+      if (el) el.value = '';                                 // 읽자마자 칸을 비운다
+      if (String(v).trim() === '') { toast('주민번호를 입력해 주세요'); return false; }
+      var k = classifyRrn(v, p.gender, p.birth_year);
+      if (k.state === 'invalid') { toast('주민번호 ' + rrnCodeText(k.codes)); return false; }
+      return v;
+    }
+  }, function (got) { saveRrn(eid, got, false); });
+}
+function saveRrn(eid, value, confirm) {
+  api('setRrn', eid, value, confirm).then(function (res) {
+    value = null;
+    S.boot.rrnStatus = S.boot.rrnStatus || {}; S.boot.rrnStatus[eid] = res.status;
+    toast(res.status === 'check' ? '저장했어요 (신청서와 달라 "확인 필요"로 표시돼요)' : '주민번호를 저장했어요'); render();
+    if (typeof S !== 'undefined' && S.ins && !S.ins.completed) insLoad();       // 보험 명단 창이 열려 있으면 다시 불러온다
+  }).catch(function (err) {
+    if (err.code === 'RRN_CHECK' && !confirm) {
+      var kept = value; value = null;
+      openModal({ title: '신청서와 달라요', html: '<p>' + esc(err.msg) + '</p><p class="muted">번호가 맞다면 "그대로 저장"을 눌러 주세요. 저장하면 "확인 필요"로 표시돼요.</p>', yes: '그대로 저장' },
+        function () { saveRrn(eid, kept, true); kept = null; });
+      return;
+    }
+    value = null; fail(err);
+  });
+}
+</script>

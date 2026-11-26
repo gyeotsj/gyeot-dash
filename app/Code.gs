@@ -9,7 +9,7 @@
  * 2차에서 막히면 "등록된 운영진이 아닙니다" 안내 화면이 나온다.
  */
 
-var APP_VERSION = '0.3.0 (1단계 완료)';
+var APP_VERSION = '0.4.0 (2단계 완료)';
 
 /**
  * 진입점. 코드 안에서 생기는 오류는 날것의 오류 화면 대신 안내 화면을 보여 주고,
@@ -71,6 +71,8 @@ function statusFor_(email, staffRow) {
     rrn.error = email === normalizeEmail(OWNER_EMAIL) ? '주민번호 파일을 열 수 없어요' : '이 계정은 주민번호 파일에 접근할 수 없어요';
   }
 
+  var extras = {};
+  if (db.ok || db.tabs.length) { try { extras = statusExtras_(); } catch (err) { extras = {}; } }
   return {
     email: email,
     name: staffRow.name,
@@ -79,7 +81,11 @@ function statusFor_(email, staffRow) {
     version: APP_VERSION,
     now: nowStr_(),
     db: db,
-    rrn: rrn
+    rrn: rrn,
+    sweep: extras.sweep || null,
+    rrnHeld: extras.rrnHeld || null,
+    privacy: extras.privacy || null,
+    schema: extras.schema || null
   };
 }
 

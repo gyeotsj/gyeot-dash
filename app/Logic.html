@@ -77,7 +77,7 @@ function activeOf(enrollments, sid) {
 function cancelledOf(enrollments, sid) {
   return enrollments.filter(function (e) { return e.session_id === sid && isCancelled(e); });
 }
-var STEP_COLS = { m1: 'm1_at', pay: 'pay_at', ins: 'ins_at', m2: 'm2_at' };
+var STEP_COLS = { m1: 'm1_at', pay: 'pay_at', ins: 'ins_at', m2: 'm2_at', sat: 'sat_at' };
 /** 단계 완료 여부. 참석은 '참석'일 때만 완료 */
 function stepDone(e, key) { return key === 'attend' ? e.attend === '참석' : !!e[STEP_COLS[key]]; }
 function countDone(list, key) { return list.filter(function (e) { return stepDone(e, key); }).length; }
@@ -137,6 +137,98 @@ function dashKpi(boot) {
   }
   return out;
 }
+
+/**
+ * 만족도 응답률. 시작한 회차에서 "참석"으로 정리된 사람(취소 제외)을 분모로, 응답을 표시한 사람을 분자로 센다.
+ * (미정·불참은 분모에 넣지 않는다.) 해당하는 사람이 없으면 null.
+ */
+function satKpi(boot) {
+  var today = boot.today, total = 0, done = 0;
+  boot.sessions.forEach(function (s) {
+    if (!sessionState(s, today).started) return;
+    activeOf(boot.enrollments, s.session_id).forEach(function (e) {
+      if (e.attend !== '참석') return;
+      total++; if (e.sat_at) done++;
+    });
+  });
+  return total ? { done: done, total: total } : null;
+}
+
+/* ---------- 문자·메일 발송 준비 (서버 Lib.gs 의 messageTargets 와 같은 규칙) ---------- */
+
+var STAGE_INFO = {
+  m1: { name: '1차 안내', filter: 'nom1', ch: 'mail' },
+  pay: { name: '입금 요청', filter: 'unpaid', ch: 'sms' },
+  m2: { name: '최종 안내', filter: 'nom2', ch: 'sms' },
+  sat: { name: '만족도 요청', filter: 'nosat', ch: 'sms' },
+  etc: { name: '기타', filter: 'all', ch: 'sms' }
+};
+var FILTER_TEXT = { all: '확정 인원 전체', unpaid: '입금 미완료', uninsured: '보험 미가입', nom1: '1차 안내 미발송', nom2: '최종 안내 미발송', nosat: '만족도 미응답 (참석자 중)' };
+var PROG_LABEL = { all: '공통', w: '일해보기', l: '살아보기', g: '자라보기' };
+var CHANNEL_LABEL = { sms: '문자', mail: '메일' };
+
+/** 발송 대상: 그 회차의 합격 · 취소 아님인 참여 기록 중 조건에 맞는 것 */
+function messageTargets(enrollments, sid, filter) {
+  return enrollments.filter(function (e) {
+    if (e.session_id !== sid || isCancelled(e) || e.pass === '불합격') return false;
+    switch (filter) {
+      case 'all': return true;
+      case 'unpaid': return !e.pay_at;
+      case 'uninsured': return !e.ins_at;
+      case 'nom1': return !e.m1_at;
+      case 'nom2': return !e.m2_at;
+      case 'nosat': return e.attend === '참석' && !e.sat_at;
+      default: return false;
+    }
+  });
+}
+
+/**
+ * 문구의 자리표시자를 채운다. ctx: { name, program, n, start, end, fee, refundDeadline, transport, formUrl }
+ * 채울 값이 없는 자리표시자({폼링크} 링크가 비었을 때 등)는 그대로 두고 missing 에 이름을 모아 돌려준다.
+ */
+function fillTemplate(body, ctx) {
+  var missing = [];
+  var rep = function (text, key, value) {
+    if (text.indexOf('{' + key + '}') < 0) return text;
+    if (value === '' || value == null) { if (missing.indexOf(key) < 0) missing.push(key); return text; }
+    return text.split('{' + key + '}').join(String(value));
+  };
+  var t = String(body == null ? '' : body);
+  t = rep(t, '이름', ctx.name);
+  t = rep(t, '프로그램', ctx.program);
+  t = rep(t, '회차', ctx.n !== '' && ctx.n != null ? ctx.n + '회차' : '');
+  t = rep(t, '날짜', ctx.start ? fmtRange(ctx.start, ctx.end || ctx.start) : '');
+  t = rep(t, '참가비', ctx.fee === '' || ctx.fee == null ? '' : Number(ctx.fee).toLocaleString());
+  t = rep(t, '환불기한', ctx.refundDeadline ? fmtMD(ctx.refundDeadline) : '');
+  t = rep(t, '이동수단', ctx.transport || '미정');
+  t = rep(t, '폼링크', ctx.formUrl);
+  return { text: t, missing: missing };
+}
+
+/** 저장한 문구 중 단계·프로그램에 맞는 것 하나: 그 프로그램 전용(가장 최근) → 공통(가장 최근) → 없음 */
+function pickSavedTemplate(templates, stage, programId) {
+  var byTime = function (a, b) { return String(a.saved_at) < String(b.saved_at) ? -1 : (String(a.saved_at) > String(b.saved_at) ? 1 : 0); };
+  var L = templates.filter(function (x) { return x.stage === stage; }).sort(byTime);
+  return L.filter(function (x) { return x.program_id === programId; }).slice(-1)[0] || L.filter(function (x) { return x.program_id === 'all'; }).slice(-1)[0] || null;
+}
+
+/** 저장한 문구 목록의 보기 조건. libStage: 'cur' | 'every' | 단계 / libProg: 'cur' | 'every' | 프로그램 | 'all' */
+function filterLibrary(templates, curStage, curProg, libStage, libProg) {
+  return templates.filter(function (x) {
+    var okS = libStage === 'every' || x.stage === (libStage === 'cur' ? curStage : libStage);
+    var okP = libProg === 'every' || (libProg === 'cur' ? (x.program_id === curProg || x.program_id === 'all') : x.program_id === libProg);
+    return okS && okP;
+  });
+}
+
+/** 문자 종류: 한글 2바이트·그 밖 1바이트로 세어 90바이트를 넘으면 장문(LMS) */
+function smsBytes(text) {
+  var n = 0, s = String(text == null ? '' : text);
+  for (var i = 0; i < s.length; i++) n += s.charCodeAt(i) > 127 ? 2 : 1;
+  return n;
+}
+function smsKind(text) { return smsBytes(text) > 90 ? 'LMS' : 'SMS'; }
 
 /* ---------- 이관: 주민번호 보호 ---------- */
 
@@ -246,6 +338,50 @@ function splitRrnColumn(rows) {
   return { rows: blanked, rrns: rrns, count: Object.keys(cols).length };
 }
 
+/**
+ * 업로드 화면에서 번호 한 건을 분류한다.
+ *  empty 비어 있음 / invalid 형식 오류(자릿수·생년월일·성별 자리) / mismatch 형식은 맞지만 신청서의 성별·출생연도와 다름 / ok 정상
+ * 반환: { state, code, codes }  (값은 담지 않는다)
+ */
+function classifyRrn(raw, gender, birthYear) {
+  if (raw == null || String(raw).trim() === '') return { state: 'empty', code: 'EMPTY', codes: ['EMPTY'] };
+  var m = rrnMatchesProfile(raw, gender, birthYear);
+  if (m.ok) return { state: 'ok', code: 'OK', codes: [] };
+  var c0 = m.codes[0];
+  if (c0 === 'BIRTH_MISMATCH' || c0 === 'GENDER_MISMATCH') return { state: 'mismatch', code: c0, codes: m.codes };
+  return { state: 'invalid', code: c0, codes: m.codes };
+}
+function rrnCodeText(codes) { return (codes || []).map(function (c) { return RRN_CODE_LABELS[c] || '확인이 필요해요'; }).join(', '); }
+
+/**
+ * 등록 요청에 실을 주민번호 목록을 만든다.
+ * rows: 미리보기 행(rowNo, rrnEligible, gender, birth_year) / mem: { 행번호: 파일에서 읽은 값 } / inputs: { 행번호: { rrn(화면에서 고쳐 입력한 값), confirm(그대로 저장) } }
+ * 정상은 싣고, 신청서와 다른 번호는 "그대로 저장"을 고른 것만 싣는다. 형식 오류·빈칸은 싣지 않는다 (등록 뒤 앱에서 입력).
+ * 반환: { items:[{rowNo, rrn, confirmMismatch}], counts:{ ok, forced, mismatch, invalid, empty } } — counts 에는 값이 없다.
+ */
+function buildRrnPayload(rows, mem, inputs) {
+  var items = [], c = { ok: 0, forced: 0, mismatch: 0, invalid: 0, empty: 0 };
+  rows.forEach(function (r) {
+    if (!r.rrnEligible) return;
+    var inp = (inputs && inputs[r.rowNo]) || {};
+    var raw = inp.rrn !== undefined && inp.rrn !== null && inp.rrn !== '' ? inp.rrn : (mem ? mem[r.rowNo] : undefined);
+    var k = classifyRrn(raw, r.gender, r.birth_year);
+    if (k.state === 'ok') { items.push({ rowNo: r.rowNo, rrn: raw, confirmMismatch: false }); c.ok++; }
+    else if (k.state === 'mismatch' && inp.confirm) { items.push({ rowNo: r.rowNo, rrn: raw, confirmMismatch: true }); c.forced++; }
+    else c[k.state]++;
+  });
+  return { items: items, counts: c };
+}
+
+/** 미리보기 판정의 한글 이름과 칩 색 */
+var DECISION_TEXT = {
+  new: ['신규', 'ok'], existing: ['이미 등록됨 · 빈 칸 보충', 'pri'], rejected: ['불합격 · 제외', ''], cancelled_new: ['취소 상태로 등록', 'warn'],
+  needs_session: ['회차 확인 필요', 'bad'], duplicate_in_file: ['파일 안 중복 · 제외', ''], error: ['읽을 수 없음', 'bad']
+};
+/** 열 이름(영문)을 사람이 읽는 말로 */
+var FILL_LABELS = { job: '직업', area: '거주지', email: '이메일', gender: '성별', birth_year: '출생연도', consent_retain: '추가 보유 동의', consent_portrait: '초상권 동의',
+  applied_at: '신청일', hp_no: '홈페이지 번호', notice_ack: '안내 확인', memo: '남긴 말', attend: '참석 여부' };
+
 /* ---------- 2단계: 할 일 (F3) ---------- */
 
 var TODO_KIND_RANK = { rrn: 0, ins: 1, pay: 2, refund: 3, m1: 4, attend: 5, sat: 6 };
@@ -258,6 +394,22 @@ var TODO_SEV_RANK = { bad: 0, warn: 1, pri: 2 };
  *  attend 종료 후 참석 정리 / sat 만족도 미응답 (참석자 중)
  * boot.rrnStatus({참여기록ID: ok|missing|check})가 없으면 주민번호 항목은 만들지 않는다.
  */
+/** 할 일 한 줄의 제목 (n: 인원) */
+function todoTitle(kind, n) {
+  switch (kind) {
+    case 'rrn': return '주민번호 없음·확인 필요 ' + n + '명';
+    case 'ins': return '여행자보험 미가입 ' + n + '명';
+    case 'pay': return '참가비 입금 미확인 ' + n + '명';
+    case 'refund': return '전액 환불 기한이 곧 끝나요 (참여 ' + n + '명)';
+    case 'm1': return '1차 안내 미발송 ' + n + '명';
+    case 'attend': return '참석 여부 입력 필요 ' + n + '명';
+    case 'sat': return '만족도 응답 표시 필요 ' + n + '명';
+    default: return String(kind);
+  }
+}
+/** 사이드바 배지: 긴급(빨강) 할 일 항목 수 */
+function urgentTodoCount(boot) { return todoList(boot).filter(function (t) { return t.sev === 'bad'; }).length; }
+
 function todoList(boot) {
   var t = boot.today, out = [], refundDays = boot.config.refund_days;
   var rs = boot.rrnStatus || null;
@@ -265,7 +417,7 @@ function todoList(boot) {
     var st = sessionState(s, t), A = activeOf(boot.enrollments, s.session_id);
     var add = function (kind, sev, n) { if (n > 0) out.push({ kind: kind, sev: sev, n: n, sid: s.session_id, days: st.days }); };
     if (!st.done) {
-      if (rs && st.days <= 14) add('rrn', st.days <= 7 ? 'bad' : 'warn', A.filter(function (e) { return e.pass !== '불합격' && rs[e.enroll_id] !== 'ok'; }).length);
+      if (rs && st.days <= 14) add('rrn', st.days <= 7 ? 'bad' : 'warn', A.filter(function (e) { return e.pass !== '불합격' && !stepDone(e, 'ins') && rs[e.enroll_id] !== 'ok'; }).length);   // 보험 가입을 마치면 번호는 지워지므로 더 필요 없다
       if (st.days <= 7) add('ins', st.days <= 3 ? 'bad' : 'warn', A.filter(function (e) { return !stepDone(e, 'ins'); }).length);
       if (st.days <= 10) add('pay', st.days <= 3 ? 'bad' : 'warn', A.filter(function (e) { return !stepDone(e, 'pay'); }).length);
       var rdd = diffDays(refundDeadline(s, refundDays), t);

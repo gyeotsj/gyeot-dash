@@ -1,0 +1,107 @@
+<script>
+/**
+ * 여행자보험 명단 내려받기와 가입 완료 처리 (회차 상세).
+ *
+ * 주민번호 규칙: 서버가 보내 준 명단의 번호(INS_ROWS)는 이 브라우저의 메모리에만 두고, 엑셀 파일을 만드는 데만 쓴다.
+ * 화면(HTML)에는 이름과 개수만 나오고 번호는 나오지 않는다. 창을 닫거나 완료 처리를 하면 메모리에서도 지운다.
+ */
+var INS_ROWS = null;   // [{ enroll_id, name, rrn }]
+
+function insOpen(sid) {
+  INS_ROWS = null;
+  S.ins = { sid: sid, loading: true, data: null, error: '', downloaded: false, ok: false, busy: false, fileName: '', completed: null };
+  render();
+  insLoad();
+}
+function insLoad() {
+  var st = S.ins; if (!st) return;
+  st.loading = true; st.error = ''; render();
+  api('getInsuranceList', st.sid).then(function (res) {
+    if (S.ins !== st) return;
+    INS_ROWS = res.list.map(function (x) { return { enroll_id: x.enroll_id, name: x.name, rrn: x.rrn }; });
+    st.data = { names: res.list.map(function (x) { return x.name; }), excluded: res.excluded, done: res.done };
+    st.loading = false; render();
+  }).catch(function (err) { if (S.ins !== st) return; st.loading = false; st.error = err.msg; render(); });
+}
+function insClose() { INS_ROWS = null; S.ins = null; render(); }
+
+function insureHtml() {
+  var st = S.ins, s = X.session[st.sid] || {};
+  var title = esc(progName(s.program_id)) + ' ' + esc(s.n) + '회차';
+  var body;
+  if (st.completed) {
+    body = '<div class="ban">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>보험 가입 완료로 처리했어요.</b><br>' + st.completed + '명의 주민번호는 지워졌어요.</div></div>' +
+      '<div class="note"><b>내려받은 명단 파일은 컴퓨터에서 지워 주세요.</b> 주민번호가 들어 있어서 보험사에 올린 뒤에는 보관하지 않는 것이 안전해요. 휴지통도 비워 주세요.</div>' +
+      '<div class="row" style="margin-top:16px"><button class="btn pri" data-act="ins-close">닫기</button></div>';
+  } else if (st.loading && !st.data) {
+    body = '<div class="muted" style="margin-top:18px">불러오는 중…</div>';
+  } else if (st.error) {
+    body = '<div class="err" style="margin-top:12px">' + esc(st.error) + '</div><div class="row" style="margin-top:12px"><button class="btn" data-act="ins-reload">다시 불러오기</button></div>';
+  } else {
+    var d = st.data, n = d.names.length;
+    var exc = d.excluded.map(function (x) {
+      return '<tr><td class="nw"><b>' + esc(x.name) + '</b></td><td>' + (x.reason === 'check' ? '<span class="chip bad">확인 필요</span>' : '<span class="chip warn">번호 없음</span>') + '</td>' +
+        '<td class="nw" style="text-align:right"><button class="btn sm" data-act="rrn-edit" data-eid="' + esc(x.enroll_id) + '">주민번호 ' + (x.reason === 'check' ? '수정' : '입력') + '</button></td></tr>';
+    }).join('');
+    body = '<div class="sec">명단에 들어가는 사람</div>' +
+      (n ? '<div class="pill-row">' + d.names.map(function (nm) { return '<span class="chip pri">' + esc(nm) + '</span>'; }).join('') + '</div>' : '<div class="muted">명단에 넣을 사람이 없어요.</div>') +
+      '<div class="muted" style="margin-top:8px;font-size:12.5px">합격 · 취소 아님 · 보험 가입 전 · 주민번호가 정상인 <b>' + n + '명</b>이에요. 주민번호는 화면에 표시되지 않고 엑셀 파일에만 들어가요.</div>' +
+      (d.done ? '<div class="muted" style="margin-top:6px;font-size:12.5px">이미 가입을 마친 ' + d.done + '명은 빠졌어요.</div>' : '') +
+      (d.excluded.length
+        ? '<div class="sec">빠진 사람 ' + d.excluded.length + '명</div><div class="scroll"><table class="tbl"><tbody>' + exc + '</tbody></table></div>' +
+          '<div class="muted" style="margin-top:8px;font-size:12.5px">번호를 입력한 뒤 <a data-act="ins-reload" style="color:var(--pri);cursor:pointer">명단 다시 불러오기</a>를 누르면 포함돼요.</div>' : '') +
+      '<div class="sec">1. 엑셀 파일 만들기</div>' +
+      '<div class="row"><button class="btn pri" data-act="ins-download"' + (n ? '' : ' disabled') + '>' + IC.up.replace('<svg', '<svg style="transform:rotate(180deg)"') + ' 보험사 제출용 엑셀 내려받기</button><button class="btn sm ghost" data-act="ins-reload">다시 불러오기</button></div>' +
+      '<div class="muted" style="margin-top:6px;font-size:12.5px">첫 줄에 제목 없이 이름과 주민번호(하이픈 포함)만 들어가요. 완료 처리 전에는 몇 번이든 다시 내려받을 수 있어요.</div>' +
+      '<div class="sec">2. 보험사에 올린 뒤 완료 처리</div>' +
+      '<div style="' + (st.downloaded ? '' : 'opacity:.5;pointer-events:none') + '">' +
+      (st.downloaded ? '<div class="ban" style="margin-bottom:10px">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>' + esc(st.fileName) + '</b>을 내려받았어요. 보험사에 올려 주세요.</div></div>' : '') +
+      '<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="ins-ok" ' + (st.ok ? 'checked' : '') + ' style="margin-top:3px"> <span>보험사에 명단을 올렸어요. <b>' + n + '명을 가입 완료로 처리</b>하면 이 사람들의 <b>주민번호가 바로 지워져요.</b></span></label>' +
+      '<div class="row" style="margin-top:12px"><button class="btn pri" data-act="ins-complete"' + (!st.ok || st.busy || !n ? ' disabled' : '') + '>보험 가입 완료 처리</button></div></div>';
+  }
+  return '<div id="drawer" class="open"><div class="dim"></div><div class="panel"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h3>보험사 명단</h3><div class="muted">' + title + '</div></div>' +
+    '<button class="btn sm ghost" data-act="ins-close">' + IC.x + '</button></div>' + body + '</div></div>';
+}
+
+/** 파일 저장. (시험에서는 이 함수를 바꿔 끼워 내용을 확인한다) */
+function saveBlob(blob, filename) {
+  var url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+}
+function insDownload() {
+  var st = S.ins; if (!st || !INS_ROWS || !INS_ROWS.length) return;
+  if (typeof XLSX === 'undefined') { toast('엑셀 만들기 도구를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.'); return; }
+  var ws = XLSX.utils.aoa_to_sheet(INS_ROWS.map(function (r) { return [r.name, r.rrn]; }));      // 첫 줄 제목 없음
+  var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '명단');
+  var out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  var s = X.session[st.sid] || {}, name = '보험명단_' + progName(s.program_id) + s.n + '회_' + String(S.boot.today).replace(/-/g, '') + '.xlsx';
+  saveBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name);
+  st.downloaded = true; st.fileName = name; render();
+}
+function insComplete() {
+  var st = S.ins; if (!st || st.busy || !st.ok || !INS_ROWS || !INS_ROWS.length) return;
+  var ids = INS_ROWS.map(function (r) { return r.enroll_id; });
+  st.busy = true; render();
+  api('completeInsurance', st.sid, ids).then(function (rows) {
+    rows.forEach(function (r) { if (S.boot.rrnStatus) delete S.boot.rrnStatus[r.enroll_id]; replaceEnr(r); });
+    ids.forEach(function (id) { if (S.boot.rrnStatus) delete S.boot.rrnStatus[id]; });
+    INS_ROWS = null; st.busy = false; st.completed = ids.length; render();
+  }).catch(function (err) { st.busy = false; render(); fail(err); });
+}
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!t || t.disabled) return;
+  var a = t.getAttribute('data-act');
+  if (a === 'ins-open') insOpen(t.getAttribute('data-sid'));
+  else if (a === 'ins-close') insClose();
+  else if (a === 'ins-reload') insLoad();
+  else if (a === 'ins-download') insDownload();
+  else if (a === 'ins-complete') insComplete();
+});
+document.addEventListener('change', function (ev) {
+  if (ev.target && ev.target.id === 'ins-ok' && S.ins) { S.ins.ok = ev.target.checked; var b = document.querySelector('[data-act="ins-complete"]'); if (b) b.disabled = !S.ins.ok || S.ins.busy; }
+});
+document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && S.ins && !S.modal) insClose(); });
+</script>

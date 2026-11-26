@@ -732,6 +732,7 @@ function buildApplicationPlan(parsed, existing, opts) {
   var personKey = function (name, phone) { return String(name).trim() + '|' + digitsOnly(phone); };
   var peopleByKey = {}; existing.people.forEach(function (p) { peopleByKey[personKey(p.name, p.phone)] = p; });
   var enrByKey = {}; existing.enrollments.forEach(function (e) { enrByKey[e.session_id + '|' + e.person_id] = e; });
+  var peopleByPhone = {}; existing.people.forEach(function (p) { var d = digitsOnly(p.phone); if (d) peopleByPhone[d] = p; });
   var newPeopleByKey = {}, seen = {}, notesDone = {};
   var sum = { total: parsed.rows.length, new: 0, existing: 0, rejected: 0, cancelled_new: 0, needs_session: 0, duplicate_in_file: 0, error: 0, fills: 0, consentChanged: 0, attendFilled: 0, rrnEligible: 0 };
   var addFill = function (table, id, field, from, to, rowNo) { plan.fills.push({ table: table, id: id, field: field, from: from, to: to, rowNo: rowNo }); sum.fills++; };
@@ -789,6 +790,10 @@ function buildApplicationPlan(parsed, existing, opts) {
 
     var key = personKey(nv.value, phone);
     var person = peopleByKey[key] || newPeopleByKey[key];
+    if (!person && peopleByPhone[digitsOnly(phone)]) {   // 연락처는 같은데 이름이 다르면 다른 사람으로 보고 새로 만들지만, 같은 사람일 수 있어 알린다
+      res.reason = '같은 연락처의 다른 이름이 이미 있어요 (같은 사람이면 등록 전에 참여자 수정에서 이름을 맞추세요)';
+      plan.warnings.push('같은 연락처로 이름이 다른 사람이 이미 있어 새 사람으로 등록돼요 (' + at + '). 같은 사람이면 등록하지 말고 참여자 수정에서 이름을 먼저 맞춰 주세요');
+    }
     if (person && seen[sid + '|' + person.person_id]) { res.decision = 'duplicate_in_file'; sum.duplicate_in_file++; plan.warnings.push('같은 파일에 같은 사람이 같은 회차로 또 있어 건너뛰었어요 (' + at + ')'); return; }
 
     var started = diffDaysStr_(sess.start, today) <= 0;
@@ -888,6 +893,356 @@ function planRrnWrites(plan, rrns, sessions) {
   return out;
 }
 
+/**
+ * 스키마 확장 계획. 시트의 머리글이 정의(cols)의 "앞부분"과 정확히 같으면, 빠진 뒤쪽 열 이름만 덧붙이면 된다.
+ * 기존 열의 이름·순서가 다르거나 정의에 없는 열이 있으면 건드리지 않고 문제로 알린다.
+ * 반환: { ok, add: [덧붙일 열], problem }
+ */
+function planSchemaMigration(cols, header) {
+  var h = (header || []).map(function (x) { return String(x == null ? '' : x).trim(); });
+  while (h.length && h[h.length - 1] === '') h.pop();
+  if (!h.length) return { ok: false, add: [], problem: '머리글이 비어 있어요 (setup 을 먼저 실행해 주세요)' };
+  if (h.length > cols.length) return { ok: false, add: [], problem: '정의에 없는 열이 있어요' };
+  for (var i = 0; i < h.length; i++) {
+    if (h[i] !== cols[i]) return { ok: false, add: [], problem: '열 이름이나 순서가 정의와 달라요' };
+  }
+  return { ok: true, add: cols.slice(h.length), problem: '' };
+}
+
+/* ================= 2단계: 신청 엑셀 업로드 — 입력 검사, 채운 칸 정리, 되돌리기 계획 ================= */
+
+/**
+ * 업로드 요청을 검사한다. 본문 행(rows)에는 주민번호 모양이 하나도 없어야 하고(있으면 거부), 주민번호는 rrns 칸으로만 받는다.
+ * payload: { rows, programId, sessionMap({행번호: session_id}), applyAttend, rrns([{rowNo, rrn, confirmMismatch}]) }
+ * 반환: { ok, error, value: { rows, programId, sessionMap, applyAttend, rrns } }
+ */
+function sanitizeApplicationPayload(payload) {
+  var bad = function (e) { return { ok: false, error: e }; };
+  if (!payload || typeof payload !== 'object') return bad('요청 형식이 맞지 않아요.');
+  if (PROGRAM_IDS.indexOf(payload.programId) < 0) return bad('프로그램이 올바르지 않아요.');
+  var rows = payload.rows;
+  if (!Array.isArray(rows)) return bad('엑셀 데이터 형식이 맞지 않아요.');
+  if (rows.length > 600) return bad('행이 너무 많아요 (최대 600행). 파일을 나눠 올려 주세요.');
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r == null) { out.push([]); continue; }
+    if (!Array.isArray(r) || r.length > 60) return bad('엑셀 데이터 형식이 맞지 않아요.');
+    out.push(r.map(function (c) {
+      var t = typeof c;
+      if (t === 'number' || t === 'boolean') return c;
+      if (t === 'string') return c.slice(0, 1200);
+      return '';
+    }));
+  }
+  if (containsRrn(out)) return bad('엑셀 본문에 주민번호 모양의 값이 있어서 중단했어요. 주민번호 열이 따로 분리되지 않았을 수 있어요.');
+
+  var sessionMap = {};
+  var sm = payload.sessionMap && typeof payload.sessionMap === 'object' ? payload.sessionMap : {};
+  Object.keys(sm).forEach(function (k) {
+    if (/^\d{1,5}$/.test(k) && typeof sm[k] === 'string' && sm[k].length <= 40) sessionMap[+k] = sm[k];
+  });
+
+  var rrns = [];
+  if (payload.rrns != null) {
+    if (!Array.isArray(payload.rrns) || payload.rrns.length > 600) return bad('주민번호 목록 형식이 맞지 않아요.');
+    for (var j = 0; j < payload.rrns.length; j++) {
+      var x = payload.rrns[j];
+      if (!x || typeof x !== 'object' || !(+x.rowNo > 0)) return bad('주민번호 목록 형식이 맞지 않아요.');
+      var raw = x.rrn;
+      if (typeof raw === 'string') raw = raw.slice(0, 40);
+      else if (typeof raw !== 'number') raw = '';
+      rrns.push({ rowNo: Math.floor(+x.rowNo), rrn: raw, confirmMismatch: x.confirmMismatch === true });
+    }
+  }
+  return { ok: true, value: { rows: out, programId: payload.programId, sessionMap: sessionMap, applyAttend: payload.applyAttend !== false, rrns: rrns } };
+}
+
+/** 짧은 해시(FNV-1a 32비트, 16진수). 채운 칸이 그대로인지 비교하는 데만 쓴다 (값 자체를 기록에 남기지 않기 위해) */
+function hashText_(v) {
+  var s = String(v == null ? '' : v), h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+
+var UPLOAD_CONSENT_FIELDS_ = ['consent_retain', 'consent_portrait'];
+
+/**
+ * 같은 칸에 대한 채움이 여러 번 나오면 하나로 합친다. 처음 값(from)은 처음 것을 쓰고, 동의 칸은 더 제한적인 값으로 접는다.
+ * 합쳤더니 바뀌는 것이 없으면(from 과 같으면) 뺀다.
+ */
+function collapseFills(fills) {
+  var order = [], by = {};
+  (fills || []).forEach(function (f) {
+    var k = f.table + '|' + f.id + '|' + f.field;
+    if (!by[k]) { by[k] = { table: f.table, id: f.id, field: f.field, from: f.from, to: f.to }; order.push(k); return; }
+    if (UPLOAD_CONSENT_FIELDS_.indexOf(f.field) >= 0) by[k].to = mergeConsent(by[k].to, f.to).value;
+  });
+  return order.map(function (k) { return by[k]; }).filter(function (f) { return String(f.to) !== String(f.from == null ? '' : f.from); });
+}
+
+/**
+ * 되돌리기 기록(manifest)을 만든다. ID 와 해시만 담고 이름·연락처·직업 같은 값은 담지 않는다.
+ *  e 새 참여 기록 ID / p 새 사람 ID / f 채운 칸 [표(P|E), ID, 열, 채우기 전 값(동의·참석만), 채운 값의 해시] /
+ *  n 회차 메모 [session_id, 전, 후] (테마 이름이라 개인정보 아님) / r 주민번호를 저장한 참여 기록 ID
+ */
+function buildUploadManifest(plan, fills, rrnEnrollIds) {
+  return {
+    v: 1,
+    e: plan.newEnrollments.map(function (x) { return x.enroll_id; }),
+    p: plan.newPeople.map(function (x) { return x.person_id; }),
+    f: fills.map(function (f) {
+      var keepFrom = UPLOAD_CONSENT_FIELDS_.indexOf(f.field) >= 0 || f.field === 'attend';
+      return [f.table === 'People' ? 'P' : 'E', f.id, f.field, keepFrom ? String(f.from == null ? '' : f.from) : '', hashText_(f.to)];
+    }),
+    n: plan.sessionNotes.map(function (n) { return [n.session_id, n.from, n.to]; }),
+    r: rrnEnrollIds.slice()
+  };
+}
+
+/**
+ * 되돌리기 계획. cur: { people, enrollments, sessions } 지금 상태.
+ *  - 새 참여 기록은 모두 지운다 (그 뒤에 고친 것도 함께 사라진다)
+ *  - 새 사람은 다른 참여 기록이 남아 있지 않을 때만 지운다
+ *  - 채운 칸은 아직 채운 그 값일 때만 원래대로 되돌린다 (그 뒤에 사람이 고친 칸은 건드리지 않는다)
+ * 반환: { delEnroll, delPeople, keptPeople, restores:[{table, id, field, from}], skippedCells, noteRestores:[{session_id, from}], rrnIds, counts }
+ */
+function planUndo(manifest, cur) {
+  var m = manifest || {};
+  var enrById = {}; cur.enrollments.forEach(function (e) { enrById[e.enroll_id] = e; });
+  var perById = {}; cur.people.forEach(function (p) { perById[p.person_id] = p; });
+  var delEnroll = (m.e || []).filter(function (id) { return enrById[id]; });
+  var gone = {}; delEnroll.forEach(function (id) { gone[id] = true; });
+  var used = {}; cur.enrollments.forEach(function (e) { if (!gone[e.enroll_id]) used[e.person_id] = true; });
+  var delPeople = [], keptPeople = 0;
+  (m.p || []).forEach(function (id) { if (!perById[id]) return; if (used[id]) keptPeople++; else delPeople.push(id); });
+  var goneP = {}; delPeople.forEach(function (id) { goneP[id] = true; });
+
+  var restores = [], skipped = 0;
+  (m.f || []).forEach(function (f) {
+    var table = f[0] === 'P' ? 'People' : 'Enrollments', id = f[1], field = f[2], from = f[3], h = f[4];
+    var row = table === 'People' ? perById[id] : enrById[id];
+    if (!row || gone[id] || goneP[id]) return;
+    if (hashText_(row[field]) === h) restores.push({ table: table, id: id, field: field, from: from });
+    else skipped++;
+  });
+  var sessById = {}; cur.sessions.forEach(function (s) { sessById[s.session_id] = s; });
+  var noteRestores = [];
+  (m.n || []).forEach(function (n) {
+    var s = sessById[n[0]];
+    if (s && String(s.note || '') === String(n[2])) noteRestores.push({ session_id: n[0], from: n[1] });
+  });
+  // 주민번호: 업로드 때 저장한 것 + 지워지는 참여 기록에 나중에 입력한 것 모두 (남는 번호가 없게)
+  var rrnSeen = {}, rrnIds = [];
+  (m.r || []).concat(delEnroll).forEach(function (id) { if (!rrnSeen[id]) { rrnSeen[id] = true; rrnIds.push(id); } });
+  return {
+    delEnroll: delEnroll, delPeople: delPeople, keptPeople: keptPeople, restores: restores, skippedCells: skipped, noteRestores: noteRestores, rrnIds: rrnIds,
+    counts: { enrollments: delEnroll.length, people: delPeople.length, keptPeople: keptPeople, cells: restores.length, skippedCells: skipped, notes: noteRestores.length, rrn: rrnIds.length }
+  };
+}
+
+/* ================= 3단계: 만족도 응답 확인 (F9) ================= */
+
+/** 문자열에서 공백을 모두 없앤 이름 (이름 비교용) */
+function normName_(s) { return String(s == null ? '' : s).replace(/\s+/g, ''); }
+
+/** 한 글자 차이(바꾸기·넣기·빼기)인지. 같은 글자면 false */
+function oneEdit_(a, b) {
+  if (a === b) return false;
+  var la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  var i = 0;
+  while (i < la && i < lb && a.charAt(i) === b.charAt(i)) i++;
+  if (la === lb) return a.slice(i + 1) === b.slice(i + 1);
+  return la > lb ? a.slice(i + 1) === b.slice(i) : b.slice(i + 1) === a.slice(i);
+}
+
+/**
+ * 구글폼 응답의 기수 칸: "3기 | 10/19~21", "3기", "3회차", "3회 10/19-21" 모두 읽는다.
+ * 반환: { n, startMD, endMD } (날짜는 없으면 null). 번호를 못 찾으면 null
+ */
+function parseSatRound(text) {
+  var t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  var m = /(\d+)\s*(?:기|회차|회)/.exec(t);
+  if (!m) return null;
+  var out = { n: +m[1], startMD: null, endMD: null };
+  var p2 = function (n) { return String(n).padStart(2, '0'); };
+  var d = /(\d{1,2})\/(\d{1,2})\s*(?:\([^)]*\))?\s*[-~–]\s*(?:(\d{1,2})\/)?(\d{1,2})/.exec(t.slice(m.index + m[0].length));
+  if (d) { out.startMD = p2(d[1]) + '-' + p2(d[2]); out.endMD = p2(d[3] || d[1]) + '-' + p2(d[4]); }
+  return out;
+}
+
+/**
+ * 응답을 참여 기록에 연결하는 판정. 저장하지 않는다. 응답의 점수·서술 같은 내용은 받지 않는다.
+ * responses: [{ respKey, rowNo, name, roundText, at }] / existing: { sessions, people, enrollments } / opts: { program_id, synced({respKey: true}) }
+ * 판정: auto(이름이 정확히 같고 그 회차에 한 명) · already(이미 응답 표시됨) · homonym(동명이인) · similar(한 글자 다른 후보) ·
+ *       none(후보 없음) · no_round(기수를 못 읽음/회차 없음) · no_name(이름 없음) · duplicate(같은 사람의 앞선 응답이 있음) · synced(이미 처리한 응답)
+ * 반환: { rows:[{ respKey, rowNo, decision, session_id, enroll_id, candidates:[enroll_id…] }], summary }
+ */
+function matchResponses(responses, existing, opts) {
+  var sessions = existing.sessions.filter(function (s) { return s.program_id === opts.program_id; });
+  var pBy = {}; existing.people.forEach(function (p) { pBy[p.person_id] = p; });
+  var synced = opts.synced || {}, claimed = {};
+  var sum = { total: responses.length, auto: 0, already: 0, homonym: 0, similar: 0, none: 0, no_round: 0, no_name: 0, duplicate: 0, synced: 0 };
+  var rows = responses.map(function (r) {
+    var res = { respKey: r.respKey, rowNo: r.rowNo, decision: '', session_id: '', enroll_id: '', candidates: [] };
+    var done = function (d) { res.decision = d; sum[d]++; return res; };
+    if (synced[r.respKey]) return done('synced');
+    var name = normName_(r.name);
+    if (!name) return done('no_name');
+    var rd = parseSatRound(r.roundText);
+    if (!rd) return done('no_round');
+    var cand = sessions.filter(function (s) { return Number(s.n) === rd.n; });
+    if (cand.length > 1 && rd.startMD) {
+      var exact = cand.filter(function (s) { return String(s.start).slice(5) === rd.startMD; });
+      if (exact.length) cand = exact;
+    }
+    if (cand.length !== 1) return done('no_round');
+    var sess = cand[0]; res.session_id = sess.session_id;
+    var pool = existing.enrollments.filter(function (e) { return e.session_id === sess.session_id && !enrCancelled_(e) && e.pass !== '불합격' && pBy[e.person_id]; });
+    var same = pool.filter(function (e) { return normName_(pBy[e.person_id].name) === name; });
+    if (same.length === 1) {
+      var e = same[0]; res.enroll_id = e.enroll_id;
+      if (e.sat_at) return done('already');
+      if (claimed[e.enroll_id]) return done('duplicate');
+      claimed[e.enroll_id] = true;
+      return done('auto');
+    }
+    if (same.length > 1) { res.candidates = same.slice(0, 6).map(function (x) { return x.enroll_id; }); return done('homonym'); }
+    var sim = pool.filter(function (e) { return oneEdit_(normName_(pBy[e.person_id].name), name); });
+    if (sim.length) { res.candidates = sim.slice(0, 6).map(function (x) { return x.enroll_id; }); return done('similar'); }
+    return done('none');
+  });
+  return { rows: rows, summary: sum };
+}
+
+/** 구글 시트 주소(`…/d/<ID>/edit…`) 또는 ID 에서 시트 ID 를 꺼낸다. 비면 '', 형식이 안 맞으면 null */
+function parseSheetId(input) {
+  var s = String(input == null ? '' : input).trim();
+  if (s === '') return '';
+  var m = /\/d\/([A-Za-z0-9_-]{20,})/.exec(s);
+  if (m) return m[1];
+  return /^[A-Za-z0-9_-]{20,}$/.test(s) ? s : null;
+}
+
+/**
+ * 프로그램 설정 입력 검사. 들어온 항목만 검사해 clean 에 담는다.
+ * form_url(만족도 폼 링크), form_sheet_id(응답 시트 주소 또는 ID), form_tab(응답 탭 이름, 비우면 첫 탭)
+ */
+function validateProgramInput(input) {
+  var errors = {}, clean = {}, i = input || {};
+  if ('form_url' in i) { var u = validateProgramForm(i.form_url); if (u.ok) clean.form_url = u.value; else errors.form_url = u.error; }
+  if ('form_sheet_id' in i) { var id = parseSheetId(i.form_sheet_id); if (id === null) errors.form_sheet_id = '시트 주소 또는 ID 형식이 맞지 않아요'; else clean.form_sheet_id = id; }
+  if ('form_tab' in i) { var t = String(i.form_tab == null ? '' : i.form_tab).trim(); if (t.length > 60) errors.form_tab = '너무 길어요 (최대 60자)'; else clean.form_tab = t; }
+  return { ok: Object.keys(errors).length === 0, clean: clean, errors: errors };
+}
+
+/**
+ * 응답 시트 머리글에서 읽을 열을 찾는다. 이름 열("이름"이 들어간 첫 열), 기수 열("기수" 또는 "회차"가 들어간 첫 열), 응답 시각 열("타임스탬프").
+ * 반환: { ok, name, round, at(없으면 -1), missing:[한글 이름] }. 응답 내용이 있는 열은 찾지도 읽지도 않는다.
+ */
+function satColumns(header) {
+  var h = (header || []).map(function (x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); });
+  var find = function (fn) { for (var i = 0; i < h.length; i++) if (h[i] && fn(h[i])) return i; return -1; };
+  var name = find(function (t) { return t.indexOf('이름') >= 0; });
+  var round = find(function (t) { return t.indexOf('기수') >= 0; });
+  if (round < 0) round = find(function (t) { return t.indexOf('회차') >= 0; });
+  var at = find(function (t) { return /^(타임스탬프|timestamp)/i.test(t); });
+  var missing = [];
+  if (name < 0) missing.push('이름 열'); if (round < 0) missing.push('기수(회차) 열');
+  return { ok: missing.length === 0, name: name, round: round, at: at, missing: missing };
+}
+
+/* ================= 3단계: 개인정보 파기 (F13) ================= */
+
+/**
+ * 파기 대상 계산 (저장·삭제하지 않는다).
+ *  - 아직 끝나지 않은 회차에 참여 기록이 있는 사람은 절대 대상이 아니다.
+ *  - 기준일 = 그 사람의 모든 참여 기록 중 가장 늦은 회차 종료일 (참여 기록이 없으면 등록일, 둘 다 없으면 기준 없음)
+ *  - 추가 보유 동의 'N'(미동의): 기준일이 속한 해의 12/31이 지났으면 대상 / 'Y'(동의): 기준일 + years년이 지났으면 대상
+ *  - 동의 ''(미확인): 자동 대상이 아니다. 기한이 지났다면 "동의 확인 필요" 목록에 둔다 (기한은 미동의 기준으로 계산)
+ * 반환: { expired:[{ person_id, reason('N'|'Y'), basis, due }], review:[{ person_id, basis, due }], noBasis:[person_id], summary }
+ */
+function purgeCandidates(people, enrollments, sessions, today, years) {
+  var sBy = {}; sessions.forEach(function (s) { sBy[s.session_id] = s; });
+  var byPerson = {};
+  enrollments.forEach(function (e) { (byPerson[e.person_id] = byPerson[e.person_id] || []).push(e); });
+  var out = { expired: [], review: [], noBasis: [], summary: { expired: 0, review: 0, noBasis: 0, active: 0, kept: 0 } };
+  people.forEach(function (p) {
+    var list = byPerson[p.person_id] || [], last = '', openNow = false;
+    list.forEach(function (e) {
+      var s = sBy[e.session_id]; if (!s) return;
+      if (String(s.end) >= today) openNow = true;
+      if (String(s.end) > last) last = String(s.end);
+    });
+    if (openNow) { out.summary.active++; return; }
+    if (!last) last = String(p.created_at || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(last)) { out.noBasis.push(p.person_id); out.summary.noBasis++; return; }
+    var dueN = last.slice(0, 4) + '-12-31';
+    var dueY = addMonths(last, 12 * (years || 3));
+    var c = p.consent_retain;
+    if (c === 'N') { if (dueN < today) { out.expired.push({ person_id: p.person_id, reason: 'N', basis: last, due: dueN }); out.summary.expired++; } else out.summary.kept++; }
+    else if (c === 'Y') { if (dueY < today) { out.expired.push({ person_id: p.person_id, reason: 'Y', basis: last, due: dueY }); out.summary.expired++; } else out.summary.kept++; }
+    else if (dueN < today) { out.review.push({ person_id: p.person_id, basis: last, due: dueN }); out.summary.review++; }
+    else out.summary.kept++;
+  });
+  return out;
+}
+
+/**
+ * 파기 전에 남기는 익명 통계. 지울 사람들의 참여 기록을 회차별로 모아 Stats 한 줄씩 만든다 (이름·연락처 없음).
+ * 연령대는 회차 연도 - 출생연도. 열: year, program_id, session_id, n_applied(취소 아닌 참여), n_attend, n_male, n_female,
+ * n_age_under20, n_age_20s, n_age_30s, n_age_40plus, jobs_json, areas_json (값별 인원수)
+ */
+function buildPurgeStats(personIds, people, enrollments, sessions) {
+  var pBy = {}; people.forEach(function (p) { pBy[p.person_id] = p; });
+  var sBy = {}; sessions.forEach(function (s) { sBy[s.session_id] = s; });
+  var want = {}; personIds.forEach(function (id) { want[id] = true; });
+  var rows = {}, order = [];
+  enrollments.forEach(function (e) {
+    if (!want[e.person_id] || enrCancelled_(e) || e.pass === '불합격') return;
+    var s = sBy[e.session_id], p = pBy[e.person_id]; if (!s || !p) return;
+    var r = rows[s.session_id];
+    if (!r) {
+      r = rows[s.session_id] = { year: String(s.start).slice(0, 4), program_id: s.program_id, session_id: s.session_id, n_applied: 0, n_attend: 0, n_male: 0, n_female: 0,
+        n_age_under20: 0, n_age_20s: 0, n_age_30s: 0, n_age_40plus: 0, jobs: {}, areas: {} };
+      order.push(s.session_id);
+    }
+    r.n_applied++;
+    if (e.attend === '참석') r.n_attend++;
+    if (p.gender === '남') r.n_male++; else if (p.gender === '여') r.n_female++;
+    var by = parseInt(p.birth_year, 10), age = by ? Number(r.year) - by : null;
+    if (age != null) { if (age < 20) r.n_age_under20++; else if (age < 30) r.n_age_20s++; else if (age < 40) r.n_age_30s++; else r.n_age_40plus++; }
+    var job = String(p.job || '').trim() || '미기재', area = String(p.area || '').trim() || '미기재';
+    r.jobs[job] = (r.jobs[job] || 0) + 1; r.areas[area] = (r.areas[area] || 0) + 1;
+  });
+  return order.map(function (id) {
+    var r = rows[id];
+    return { year: r.year, program_id: r.program_id, session_id: r.session_id, n_applied: r.n_applied, n_attend: r.n_attend, n_male: r.n_male, n_female: r.n_female,
+      n_age_under20: r.n_age_under20, n_age_20s: r.n_age_20s, n_age_30s: r.n_age_30s, n_age_40plus: r.n_age_40plus, jobs_json: JSON.stringify(r.jobs), areas_json: JSON.stringify(r.areas) };
+  });
+}
+
+/** 이미 있는 Stats 줄(같은 회차)에 새 줄을 더한다. 없으면 새 줄 그대로 */
+function mergeStatsRow(existing, add) {
+  if (!existing) return add;
+  var sumJson = function (a, b) {
+    var x = {}, y = {};
+    try { x = JSON.parse(a || '{}'); } catch (e) { x = {}; }
+    try { y = JSON.parse(b || '{}'); } catch (e) { y = {}; }
+    Object.keys(y).forEach(function (k) { x[k] = (x[k] || 0) + y[k]; });
+    return JSON.stringify(x);
+  };
+  var out = {};
+  Object.keys(add).forEach(function (k) { out[k] = add[k]; });
+  ['n_applied', 'n_attend', 'n_male', 'n_female', 'n_age_under20', 'n_age_20s', 'n_age_30s', 'n_age_40plus'].forEach(function (k) { out[k] = (Number(existing[k]) || 0) + (Number(add[k]) || 0); });
+  out.jobs_json = sumJson(existing.jobs_json, add.jobs_json); out.areas_json = sumJson(existing.areas_json, add.areas_json);
+  return out;
+}
+
 /* ================= 2단계: 보험 명단 (F6), 자동 정리 ================= */
 
 /**
@@ -906,6 +1261,30 @@ function buildInsuranceRows(enrollments, people, rrnRows, sessionId) {
     else excluded.push({ enroll_id: e.enroll_id, name: p.name });
   });
   return { list: list, excluded: excluded };
+}
+
+/**
+ * 보험 명단 화면용. 이미 보험 가입을 마친 사람(번호는 지워짐)은 빼고 따로 센다(done).
+ * 번호가 있어도 신청서의 성별·출생연도와 맞지 않아 "확인 필요"인 사람은 명단에 넣지 않고 제외 목록에 이유(check)와 함께 둔다.
+ * 반환: { list:[{enroll_id, name, rrn}], excluded:[{enroll_id, name, reason:'missing'|'check'}], done }
+ */
+function buildInsuranceList(enrollments, people, rrnRows, sessionId) {
+  var pBy = {}; people.forEach(function (p) { pBy[p.person_id] = p; });
+  var rrnBy = {}; (rrnRows || []).forEach(function (r) { rrnBy[r.enroll_id] = r.rrn; });
+  var pending = [], okRows = [], reasonBy = {}, done = 0;
+  enrollments.forEach(function (e) {
+    if (e.session_id !== sessionId || enrCancelled_(e) || e.pass === '불합격' || !pBy[e.person_id]) return;
+    if (e.ins_at) { done++; return; }
+    pending.push(e);
+    var st = rrnStatusFor(rrnBy[e.enroll_id], pBy[e.person_id]);
+    if (st === 'ok') okRows.push({ enroll_id: e.enroll_id, rrn: rrnBy[e.enroll_id] }); else reasonBy[e.enroll_id] = st;
+  });
+  var res = buildInsuranceRows(pending, people, okRows, sessionId);
+  return {
+    list: res.list,
+    excluded: res.excluded.map(function (x) { return { enroll_id: x.enroll_id, name: x.name, reason: reasonBy[x.enroll_id] || 'missing' }; }),
+    done: done
+  };
 }
 
 /** 'yyyy-MM-dd' 에 n개월을 더한다. 말일이 없는 달이면 그 달 말일로 맞춘다 (1/31 + 1개월 = 2/28 또는 2/29) */
@@ -928,23 +1307,98 @@ function rrnPurgeCandidates(rrnRows, today, months) {
 
 /* ================= 2단계: 문구 저장, 프로그램 설정 ================= */
 
-var TEMPLATE_RULES = {
-  name: { type: 'text', max: 60, required: true },
-  stage: { type: 'enum', values: STAGES },
-  program_id: { type: 'enum', values: ['all'].concat(PROGRAM_IDS) },
-  channel: { type: 'enum', values: ['sms', 'mail'] },
-  body: { type: 'text', max: 2000, required: true }
-};
+/**
+ * 주의: 구글 Apps Script 는 파일을 이름 순서(Lib.gs → Schema.gs)로 읽는다. 그래서 맨 위(파일 최상위)에서
+ * Schema.gs 의 값(STAGES 등)을 쓰면 "STAGES is not defined" 로 멈춘다. 함수 안에서만 쓴다.
+ */
+function templateRules_() {
+  return {
+    name: { type: 'text', max: 60, required: true },
+    stage: { type: 'enum', values: STAGES },
+    program_id: { type: 'enum', values: ['all'].concat(PROGRAM_IDS) },
+    channel: { type: 'enum', values: ['sms', 'mail'] },
+    body: { type: 'text', max: 2000, required: true }
+  };
+}
 
 /** 저장할 문구 검사. 본문에 주민번호 모양이 있으면 거부한다 */
 function validateTemplate(t) {
   var errors = {}, clean = {};
-  Object.keys(TEMPLATE_RULES).forEach(function (k) {
+  var rules = templateRules_();
+  Object.keys(rules).forEach(function (k) {
     var raw = t == null ? '' : t[k];
     if (containsRrn(raw)) { errors[k] = '주민번호로 보이는 값은 저장할 수 없어요'; return; }
-    var r = validateValue(TEMPLATE_RULES[k], raw);
+    var r = validateValue(rules[k], raw);
     if (r.ok) clean[k] = r.value; else errors[k] = r.error;
   });
+  return { ok: Object.keys(errors).length === 0, clean: clean, errors: errors };
+}
+
+/**
+ * 지웠어야 하는데 남은 주민번호(정리 누락): 참여 기록이 없거나, 취소됐거나, 이미 보험 가입을 마친 것.
+ * 보험 완료·취소 때 바로 지우지만 그때 실패했을 수 있어서, 자동 정리가 뒷수습으로 함께 지운다.
+ */
+function rrnOrphanIds(rrnRows, enrollments) {
+  var by = {}; enrollments.forEach(function (e) { by[e.enroll_id] = e; });
+  return (rrnRows || []).filter(function (r) {
+    var e = by[r.enroll_id];
+    return !e || enrCancelled_(e) || !!e.ins_at || e.pass === '불합격';
+  }).map(function (r) { return r.enroll_id; });
+}
+
+/** 'yyyy-MM-dd HH:mm:ss' 두 시각의 차이(시간). 못 읽으면 NaN. 같은 시간대(한국)끼리만 쓴다. */
+function hoursBetween(a, b) {
+  var pa = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/.exec(String(a)), pb = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/.exec(String(b));
+  if (!pa || !pb) return NaN;
+  var t = function (m) { return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)); };
+  return (t(pb) - t(pa)) / 36e5;
+}
+
+/**
+ * 자동 정리가 돌고 있는지. last: 마지막 실행 시각(없으면 ''), now: 지금. 36시간 넘게 기록이 없으면 stale.
+ * 반환: { ran, stale, hours, message }
+ */
+function sweepStatus(last, now) {
+  if (!last) return { ran: false, stale: true, hours: null, message: '자동 정리가 아직 한 번도 실행되지 않았어요. 트리거를 설정했는지 확인해 주세요.' };
+  var h = hoursBetween(last, now);
+  if (isNaN(h)) return { ran: true, stale: true, hours: null, message: '자동 정리의 마지막 실행 시각을 읽을 수 없어요.' };
+  if (h > 36) return { ran: true, stale: true, hours: Math.floor(h), message: '자동 정리가 멈춰 있을 수 있어요 (마지막 실행 ' + Math.floor(h) + '시간 전). 트리거를 확인해 주세요.' };
+  return { ran: true, stale: false, hours: Math.floor(h), message: '' };
+}
+
+/** 발송 대상 조건: 확정 인원 전체 / 입금 미완료 / 보험 미가입 / 1차 안내 미발송 / 최종 안내 미발송 / 만족도 미응답(참석자 중) */
+var MESSAGE_FILTERS = ['all', 'unpaid', 'uninsured', 'nom1', 'nom2', 'nosat'];
+
+/**
+ * 발송 대상. 그 회차의 합격 · 취소 아님인 참여 기록 중 조건에 맞는 것 (참여 기록 순서 그대로).
+ * 화면 표시용 같은 규칙이 Logic.html 에도 있다. 서버는 화면이 보낸 대상 목록을 믿지 않고 이 함수로 다시 계산한다.
+ */
+function messageTargets(enrollments, sessionId, filter) {
+  return enrollments.filter(function (e) {
+    if (e.session_id !== sessionId || enrCancelled_(e) || e.pass === '불합격') return false;
+    switch (filter) {
+      case 'all': return true;
+      case 'unpaid': return !e.pay_at;
+      case 'uninsured': return !e.ins_at;
+      case 'nom1': return !e.m1_at;
+      case 'nom2': return !e.m2_at;
+      case 'nosat': return e.attend === '참석' && !e.sat_at;
+      default: return false;
+    }
+  });
+}
+
+/** 발송 기록 입력 검사. 본문에 주민번호 모양이 있으면 거부한다. */
+function validateMessageLog(input) {
+  var errors = {}, clean = {};
+  var chan = String(input && input.channel), stage = String(input && input.stage), filter = String(input && input.filter);
+  if (['sms', 'mail'].indexOf(chan) < 0) errors.channel = '방식이 올바르지 않아요'; else clean.channel = chan;
+  if (STAGES.indexOf(stage) < 0) errors.stage = '단계가 올바르지 않아요'; else clean.stage = stage;
+  if (MESSAGE_FILTERS.indexOf(filter) < 0) errors.filter = '발송 대상이 올바르지 않아요'; else clean.filter = filter;
+  var body = String(input && input.body != null ? input.body : '');
+  if (containsRrn(body)) errors.body = '주민번호로 보이는 값은 저장할 수 없어요';
+  else if (body.length > 2000) errors.body = '너무 길어요 (최대 2000자)';
+  else clean.body = body;
   return { ok: Object.keys(errors).length === 0, clean: clean, errors: errors };
 }
 

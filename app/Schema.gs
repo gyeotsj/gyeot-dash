@@ -36,8 +36,8 @@ const SCHEMA = {
     key: 'enroll_id',
     cols: ['enroll_id', 'session_id', 'person_id', 'hp_no', 'applied_at', 'pass', 'notice_ack', 'memo',
            'transport', 'm1_at', 'pay_at', 'pay_amount', 'refund_amount', 'ins_at', 'm2_at',
-           'attend', 'cancel_reason', 'cancelled_at', 'updated_at', 'updated_by'],
-    text: ['hp_no', 'applied_at', 'm1_at', 'pay_at', 'ins_at', 'm2_at', 'cancelled_at', 'updated_at']
+           'attend', 'cancel_reason', 'cancelled_at', 'updated_at', 'updated_by', 'sat_at'],
+    text: ['hp_no', 'applied_at', 'm1_at', 'pay_at', 'ins_at', 'm2_at', 'cancelled_at', 'updated_at', 'sat_at']
   },
   SatMatches: {
     key: 'resp_key',
@@ -68,6 +68,12 @@ const SCHEMA = {
     key: 'key',
     cols: ['key', 'value'],
     text: ['value']
+  },
+  /** 신청 엑셀 업로드 기록. manifest 는 되돌리기용(ID와 채운 칸의 해시)이며 이름·연락처 같은 값은 담지 않는다. */
+  Uploads: {
+    key: 'upload_id',
+    cols: ['upload_id', 'at', 'by', 'program_id', 'sessions', 'n_new', 'n_fill', 'n_skip', 'manifest', 'undone_at'],
+    text: ['at', 'sessions', 'manifest', 'undone_at']
   },
   Stats: {
     key: null,
@@ -122,7 +128,8 @@ const STEP_DEFS = {
   pay: { col: 'pay_at', kind: 'date' },
   ins: { col: 'ins_at', kind: 'date' },
   m2: { col: 'm2_at', kind: 'date' },
-  attend: { col: 'attend', kind: 'attend' }
+  attend: { col: 'attend', kind: 'attend' },
+  sat: { col: 'sat_at', kind: 'date' }   // 만족도 조사 응답 여부 (응답일). 2단계에서 추가된 열이라 기존 시트는 migrateSchema 가 필요
 };
 
 /** updateEnrollment가 바꿀 수 있는 열. 여기에 없는 열은 화면에서 보내도 거부한다. */
@@ -151,6 +158,7 @@ const FIELD_LABELS = {
   consent_retain: '추가 보유 동의', consent_portrait: '초상권 동의',
   transport: '이동수단', memo: '남긴 말', cancel_reason: '취소 사유',
   pay_amount: '입금액', refund_amount: '환불액',
+  stage: '단계', channel: '방식', body: '문구', filter: '발송 대상', form_url: '만족도 폼 링크', form_sheet_id: '응답 시트', form_tab: '응답 탭',
   program_id: '프로그램', n: '회차 번호', start: '시작일', end: '종료일', fee: '참가비', cap: '정원', note: '메모',
   _: '요청'
 };

@@ -1,0 +1,108 @@
+<script>
+/**
+ * 프로그램 설정(회차 관리 맨 위)과 시스템 상태(소유자 전용).
+ * 시스템 상태에는 개인정보가 없다: 개수·날짜·탭 이름만 보여 준다. 주민번호 값은 어디에도 나오지 않는다.
+ */
+IC.shield = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>';
+
+IC.archive = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/></svg>';
+
+/* ===================== 프로그램 설정 (만족도 폼 링크) ===================== */
+function progSettingsHtml() {
+  var rows = S.boot.programs.map(function (p) {
+    return '<div class="row" style="gap:10px;margin-top:10px"><div style="width:96px">' + pchip(p.program_id) + '</div>' +
+      '<input type="text" id="pg-' + esc(p.program_id) + '" value="' + esc(p.form_url || '') + '" placeholder="https://forms.gle/…  (비워 두면 링크 없음)" maxlength="300" style="flex:1;min-width:240px">' +
+      '<button class="btn sm pri" data-act="pg-save" data-id="' + esc(p.program_id) + '"' + (S.busy ? ' disabled' : '') + '>저장</button></div>';
+  }).join('');
+  return '<div class="card card-b" style="margin-bottom:16px"><b>프로그램 설정 · 만족도 폼 링크</b>' +
+    '<p class="muted" style="margin:6px 0 0">프로그램마다 다른 만족도 구글폼의 링크를 넣어 두면, 문자·메일 문구의 <b>{폼링크}</b>가 이 링크로 바뀌어요. 링크는 http:// 또는 https:// 로 시작해야 해요.</p>' + rows + '</div>';
+}
+function saveProgramUi(pid) {
+  if (S.busy) return;
+  var el = document.getElementById('pg-' + pid); if (!el) return;
+  S.busy = true;
+  api('saveProgram', pid, { form_url: el.value }).then(function (row) {
+    S.busy = false; replaceIn(S.boot.programs, 'program_id', row); reindex(); toast(row.form_url ? progName(pid) + ' 만족도 폼 링크를 저장했어요' : progName(pid) + ' 만족도 폼 링크를 지웠어요'); render();
+  }).catch(function (err) { S.busy = false; render(); fail(err); });
+}
+
+/* ===================== 시스템 상태 (소유자 전용) ===================== */
+var STAT = { data: null, loading: false, error: '', scan: null, busy: '' };
+
+function loadStatus() {
+  STAT.loading = true; STAT.error = '';
+  return api('getSystemStatus').then(function (r) { STAT.loading = false; STAT.data = r; if (S.screen === 'status') render(); })
+    .catch(function (err) { STAT.loading = false; STAT.error = err.msg; if (S.screen === 'status') render(); });
+}
+
+function statusHtml() {
+  var head = '<div class="top"><div><h1>시스템 상태</h1><div class="sub">데이터 파일, 주민번호 자동 정리, 개인정보 점검을 한곳에서 확인해요. 개인정보는 나오지 않고 개수와 날짜만 보여요.</div></div><div class="sp"></div><span class="chip warn">소유자 전용 화면</span>' +
+    '<button class="btn" data-act="st-reload"' + (STAT.loading ? ' disabled' : '') + '>새로 확인</button></div>';
+  if (!isOwner()) return head + '<div class="card"><div class="empty"><b>소유자만 볼 수 있는 화면이에요</b></div></div>';
+  if (STAT.data === null && !STAT.loading && !STAT.error) setTimeout(loadStatus, 0);
+  if (STAT.error) return head + '<div class="card"><div class="empty"><b>불러오지 못했어요</b>' + esc(STAT.error) + '</div></div>';
+  var d = STAT.data;
+  if (!d) return head + '<div class="card"><div class="empty">불러오는 중…</div></div>';
+
+  var badTabs = (d.db.tabs || []).filter(function (t) { return !t.ok; });
+  var dbCard = '<div class="card card-b"><div class="row" style="justify-content:space-between"><b>데이터 파일</b><span class="chip ' + (d.db.ok && d.rrn.ok ? 'ok dot' : 'bad dot') + '">' + (d.db.ok && d.rrn.ok ? '정상' : '확인 필요') + '</span></div>' +
+    '<div class="muted" style="margin-top:8px;line-height:1.8">버전 <b>' + esc(d.version) + '</b> · 접속 계정 ' + esc(d.email) + '<br>운영 DB: ' + (d.db.error ? '<span class="bad-text">' + esc(d.db.error) + '</span>' : (d.db.tabs || []).length + '개 탭 중 ' + ((d.db.tabs || []).length - badTabs.length) + '개 정상') +
+    '<br>주민번호 파일: ' + (d.rrn.ok ? '<span class="ok-text">접근 가능 · 정상</span>' : '<span class="bad-text">' + esc(d.rrn.error || '확인 필요') + '</span>') + '</div>' +
+    (badTabs.length ? '<ul style="margin:8px 0 0;padding-left:18px;color:var(--bad)">' + badTabs.map(function (t) { return '<li><b>' + esc(t.name) + '</b>: ' + esc(t.problem) + '</li>'; }).join('') + '</ul>' : '') + '</div>';
+
+  var sw = d.sweep || {};
+  var swCard = '<div class="card card-b"><div class="row" style="justify-content:space-between"><b>주민번호 자동 정리</b><span class="chip ' + (sw.stale ? 'bad dot' : 'ok dot') + '">' + (sw.stale ? '확인 필요' : '정상') + '</span></div>' +
+    '<div class="muted" style="margin-top:8px">마지막 실행: <b>' + esc(sw.last || '기록 없음') + '</b>' + (sw.last && sw.lastCount != null ? ' · 지운 번호 ' + esc(sw.lastCount) + '건' : '') + '</div>' +
+    (sw.stale && sw.message ? '<div class="ban warn" style="margin:10px 0 0">' + IC.warn + '<div class="sp">' + esc(sw.message) + '</div></div>' : '') +
+    '<div class="note" style="margin-top:10px"><b>트리거 설정 방법</b> (소유자가 한 번만)<ol class="step-list" style="margin-top:4px"><li>Apps Script 편집기를 열고 왼쪽의 시계 아이콘(트리거)을 눌러요.</li><li>"트리거 추가"를 눌러요.</li><li>실행할 함수 <b>sweepRrn</b>, 이벤트 소스 <b>시간 기반</b>, 유형 <b>일 단위 타이머</b>, 시간 <b>오전 1시~2시</b>로 정하고 저장해요.</li></ol>' +
+    '회차 종료 3개월이 지난 번호와 지우지 못하고 남은 번호를 매일 지워요. 36시간 넘게 실행 기록이 없으면 이 카드에 경고가 떠요.</div></div>';
+
+  var rh = d.rrnHeld || {};
+  var heldCard = '<div class="card card-b"><b>보관 중인 주민번호</b><div style="margin-top:8px;font-size:26px;font-weight:800;letter-spacing:-1px">' + (rh.count == null ? '–' : esc(rh.count)) + '<small style="font-size:14px;color:var(--muted);font-weight:600"> 건</small></div>' +
+    '<div class="muted" style="margin-top:4px">' + (rh.error ? esc(rh.error) : rh.oldestSavedAt ? '가장 오래된 보관일 ' + esc(rh.oldestSavedAt) : '보관 중인 번호가 없어요') + '</div>' +
+    '<div class="muted" style="margin-top:8px;font-size:12.5px">보험 가입 완료·신청 취소 때 바로 지워지고, 회차 종료 3개월 뒤에도 지워져요. 값은 어디에도 표시되지 않아요.</div></div>';
+
+  var pr = d.privacy || {}, sc = STAT.scan;
+  var scanBody = sc
+    ? (sc.total === 0 ? '<div class="ban" style="margin:10px 0 0">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>운영 DB에 주민번호 모양의 값이 없어요 (0개).</b> 방금 점검했어요.</div></div>'
+      : '<div class="ban warn" style="margin:10px 0 0">' + IC.warn + '<div class="sp"><b>주민번호 모양의 값 ' + esc(sc.total) + '개를 찾았어요.</b> 아래 칸의 값을 확인해 지워 주세요.<ul style="margin:6px 0 0;padding-left:18px">' + sc.findings.map(function (f) { return '<li>' + esc(f.tab) + ' 탭 · ' + esc(f.column) + ' 열 · ' + esc(f.count) + '개</li>'; }).join('') + '</ul></div></div>')
+    : '<div class="muted" style="margin-top:8px">마지막 점검: ' + (pr.last ? '<b>' + esc(pr.last) + '</b> · ' + (pr.total === 0 ? '<span class="ok-text">0개</span>' : '<span class="bad-text">' + esc(pr.total) + '개</span>') : '아직 점검한 적이 없어요') + '</div>';
+  var privCard = '<div class="card card-b"><div class="row" style="justify-content:space-between"><b>개인정보 점검</b><button class="btn sm pri" data-act="st-scan"' + (STAT.busy ? ' disabled' : '') + '>' + (STAT.busy === 'scan' ? '점검하는 중…' : '지금 점검') + '</button></div>' +
+    '<div class="muted" style="margin-top:6px;font-size:12.5px">운영 DB 모든 탭에서 주민번호 모양의 값이 있는지 찾아요. 있으면 탭·열·개수만 알려 주고 값은 보여 주지 않아요. 0개여야 정상이에요.</div>' + scanBody + '</div>';
+
+  var needs = (d.schema && d.schema.needs) || [];
+  var schemaCard = '<div class="card card-b"><div class="row" style="justify-content:space-between"><b>스키마 확장</b><span class="chip ' + (needs.length ? 'warn dot' : 'ok dot') + '">' + (needs.length ? '확장 필요' : '최신') + '</span></div>' +
+    (needs.length ? '<div class="muted" style="margin-top:8px">새 버전에서 추가된 열이 아직 없어요: ' + needs.map(function (n) { return esc(n.tab) + ' (' + esc(n.cols.join(', ')) + ')'; }).join(' · ') + '</div>' +
+        '<div class="muted" style="margin-top:6px;font-size:12.5px">기존 열과 데이터는 건드리지 않고 머리글 맨 뒤에 열만 덧붙여요. 여러 번 눌러도 안전해요.</div><div class="row" style="margin-top:10px"><button class="btn pri" data-act="st-migrate"' + (STAT.busy ? ' disabled' : '') + '>' + (STAT.busy === 'migrate' ? '확장하는 중…' : '스키마 확장') + '</button></div>'
+      : '<div class="muted" style="margin-top:8px">모든 탭의 열이 최신이에요.</div>') + '</div>';
+
+  var backupCard = '<div class="card card-b"><div class="row" style="justify-content:space-between"><b>운영 DB 백업</b><button class="btn sm" data-act="st-backup"' + (STAT.busy ? ' disabled' : '') + '>' + (STAT.busy === 'backup' ? '백업하는 중…' : '지금 백업') + '</button></div>' +
+    '<div class="muted" style="margin-top:6px;font-size:12.5px">운영 DB를 백업 폴더에 복사해 둬요. 주민번호 파일은 복사하지 않고, 백업 폴더는 소유자만 볼 수 있어요.</div></div>';
+
+  return head + '<div class="two" style="margin-top:4px"><div class="stack">' + dbCard + swCard + schemaCard + '</div><div class="stack">' + heldCard + privCard + backupCard + '</div></div>';
+}
+
+function statusAction(kind) {
+  if (STAT.busy) return;
+  var calls = { scan: ['scanForRrn'], migrate: ['migrateSchema'], backup: ['backupNow'] };
+  STAT.busy = kind; render();
+  api(calls[kind][0]).then(function (r) {
+    STAT.busy = '';
+    if (kind === 'scan') { STAT.scan = r; toast(r.total === 0 ? '점검했어요: 주민번호 모양의 값이 없어요' : '주민번호 모양의 값 ' + r.total + '개를 찾았어요'); }
+    else if (kind === 'migrate') { toast(r.added.length ? '스키마를 확장했어요 (' + r.added.map(function (a) { return a.tab + ': ' + a.cols.join(', '); }).join(' · ') + ')' : '바뀐 것이 없어요 (이미 최신)'); if (r.warnings && r.warnings.length) toast(r.warnings[0]); }
+    else toast('백업했어요 (' + r.name + ')');
+    return loadStatus();
+  }).catch(function (err) { STAT.busy = ''; render(); fail(err); });
+}
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!t || t.disabled) return;
+  var a = t.getAttribute('data-act');
+  if (a === 'pg-save') saveProgramUi(t.getAttribute('data-id'));
+  else if (a === 'st-reload') { STAT.scan = null; loadStatus(); render(); }
+  else if (a === 'st-scan') statusAction('scan');
+  else if (a === 'st-migrate') statusAction('migrate');
+  else if (a === 'st-backup') statusAction('backup');
+});
+</script>

@@ -1,0 +1,120 @@
+<script>
+/**
+ * 만족도 응답 확인 화면. 구글폼 응답 시트의 이름·기수·응답 시각만 읽어 참여 기록과 연결을 제안한다 (응답 내용은 읽지 않는다).
+ * 서버(previewSatisfaction)가 판정한 결과를 보여 주고, 운영진이 확인한 연결만 적용(applySatisfaction)한다.
+ */
+IC.chat = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.6 7.1L4 20l1.1-4.6A8 8 0 1121 12z"/><path d="M8.5 11h7M8.5 14h4"/></svg>';
+
+var SAT = { prog: 'w', data: null, loading: false, error: '', sel: {}, ign: {}, off: {}, showDone: false, busy: false, result: null };
+
+var SAT_DECISION = {
+  auto: ['자동 연결', 'ok'], already: ['이미 응답 표시됨', ''], homonym: ['동명이인 · 선택 필요', 'warn'], similar: ['비슷한 이름 · 확인 필요', 'warn'],
+  none: ['찾지 못함', 'bad'], no_round: ['기수를 못 읽음', 'bad'], no_name: ['이름이 없음', ''], duplicate: ['같은 사람의 앞선 응답이 있음', ''], synced: ['처리됨', 'pri']
+};
+
+function satProgramRow() { return X.prog[SAT.prog] || {}; }
+function satEnrLabel(eid) {
+  var e = enrOf(eid); if (!e) return eid;
+  var p = X.person[e.person_id] || {}, s = X.session[e.session_id] || {};
+  return (p.name || '?') + ' · ' + (s.n != null ? s.n + '회차' : '');
+}
+
+function satHtml() {
+  var b = S.boot, pr = satProgramRow();
+  var progs = b.programs.map(function (p) { return '<button class="' + (SAT.prog === p.program_id ? 'on' : '') + '" data-act="sat-prog" data-id="' + esc(p.program_id) + '">' + esc(p.name) + '</button>'; }).join('');
+  var head = '<div class="top"><div><h1>만족도 응답 확인</h1><div class="sub">구글폼 응답 시트의 이름·기수로 참여 기록을 찾아 "응답함"을 표시해요. 응답 내용(점수·소감·사진)은 읽지 않아요.</div></div><div class="sp"></div><div class="seg">' + progs + '</div></div>';
+  var linked = !!pr.form_sheet_id;
+  var conn = '<div class="card card-b" style="margin-bottom:16px"><div class="row"><span class="chip ' + (linked ? 'ok dot' : 'warn dot') + '">' + (linked ? '응답 시트 연결됨' : '연결 안 됨') + '</span><b>' + esc(progName(SAT.prog)) + '</b>' +
+    '<span class="muted">' + (linked ? '응답 시트는 읽기만 해요' : '회차 관리 맨 위의 프로그램 설정에서 응답 시트 주소를 넣어 주세요') + '</span><div class="sp" style="flex:1"></div>' +
+    (linked ? '<button class="btn pri" data-act="sat-load"' + (SAT.loading ? ' disabled' : '') + '>' + (SAT.loading ? '확인하는 중…' : '새 응답 확인') + '</button>' : '<button class="btn" data-act="nav" data-to="sessions">프로그램 설정으로</button>') + '</div></div>';
+  if (SAT.result) {
+    var r = SAT.result;
+    return head + conn + '<div class="ban">' + IC.check.replace('<svg', '<svg width="20" height="20"') + '<div class="sp"><b>적용했어요.</b> 연결 ' + esc(r.linked) + '건' + (r.ignored ? ' · 무시 ' + esc(r.ignored) + '건' : '') + (r.skipped ? ' · 건너뜀 ' + esc(r.skipped) + '건' : '') + '</div></div>' +
+      '<div class="row"><button class="btn pri" data-act="sat-load">응답 다시 확인</button><button class="btn" data-act="nav" data-to="sess">회차 상세로</button></div>';
+  }
+  if (SAT.error) return head + conn + '<div class="card card-b"><div class="err">' + esc(SAT.error) + '</div></div>';
+  if (!SAT.data) return head + conn + (linked ? '<div class="card"><div class="empty"><b>"새 응답 확인"을 눌러 주세요</b>응답 시트를 읽어서 누가 응답했는지 찾아 줘요. 확인하기 전에는 아무것도 바뀌지 않아요.</div></div>' : '');
+
+  var d = SAT.data, sm = d.summary;
+  var chip = function (k, n) { var t = SAT_DECISION[k]; return n ? '<span class="chip ' + t[1] + '">' + esc(t[0]) + ' ' + esc(n) + '</span>' : ''; };
+  var sums = '<div class="pill-row" style="margin:0 0 12px">' + ['auto', 'homonym', 'similar', 'none', 'no_round', 'already', 'duplicate', 'no_name', 'synced'].map(function (k) { return chip(k, sm[k]); }).join('') + '</div>';
+  var rows = d.rows.filter(function (r) { return SAT.showDone || r.decision !== 'synced'; }).map(function (r) { return satRowHtml(r); }).join('');
+  var autoN = d.rows.filter(function (r) { return r.decision === 'auto' && !SAT.off[r.respKey]; }).length;
+  var manualN = Object.keys(SAT.sel).length;
+  var ignN = Object.keys(SAT.ign).filter(function (k) { return SAT.ign[k]; }).length;
+  return head + conn + '<div class="card card-b"><b>응답 ' + esc(d.total) + '건</b>' + (d.total > d.shown ? ' <span class="muted">(앞 ' + esc(d.shown) + '건만 표시)</span>' : '') + '<div style="margin-top:8px">' + sums + '</div>' +
+    (rows ? '<div class="scroll"><table class="tbl"><thead><tr><th>응답한 사람 (응답 시트의 글)</th><th>판정</th><th>연결할 참여 기록</th><th>무시</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="note">확인할 응답이 없어요.</div>') +
+    '<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12.5px"><input type="checkbox" id="sat-showdone" ' + (SAT.showDone ? 'checked' : '') + '> 이미 처리한 응답도 보기 (연결 풀기)</label>' +
+    '<div class="row" style="margin-top:14px"><button class="btn pri" data-act="sat-apply"' + (SAT.busy || (!autoN && !manualN && !ignN) ? ' disabled' : '') + '>적용 (자동 ' + autoN + ' · 직접 고른 연결 ' + manualN + (ignN ? ' · 무시 ' + ignN : '') + ')</button>' +
+    '<span class="muted" style="font-size:12.5px">적용하면 해당 참여 기록의 만족도가 "응답함"(응답 날짜)으로 표시돼요. 이미 표시된 칸은 바꾸지 않아요.</span></div></div>';
+}
+
+function satRowHtml(r) {
+  var t = SAT_DECISION[r.decision] || [r.decision, ''];
+  var who = '<b>' + esc(r.name || '(이름 없음)') + '</b><div class="muted" style="font-size:12px">' + esc(r.roundText || '(기수 없음)') + (r.at ? ' · ' + esc(String(r.at).slice(0, 16)) : '') + '</div>';
+  var link = '';
+  if (r.decision === 'auto') {
+    link = '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-act="sat-auto" data-key="' + esc(r.respKey) + '" ' + (SAT.off[r.respKey] ? '' : 'checked') + '> ' + esc(satEnrLabel(r.enroll_id)) + '</label>';
+  } else if (r.decision === 'synced') {
+    link = r.status === 'ignored' ? '<span class="muted">무시함</span>' : esc(r.enroll_id ? satEnrLabel(r.enroll_id) : '') + ' <button class="btn sm ghost" data-act="sat-unlink" data-key="' + esc(r.respKey) + '">연결 풀기</button>';
+  } else if (r.decision === 'already' || r.decision === 'duplicate') {
+    link = '<span class="muted">' + esc(r.enroll_id ? satEnrLabel(r.enroll_id) : '') + '</span>';
+  } else if (r.decision !== 'no_name') {
+    var cand = r.candidates && r.candidates.length ? r.candidates : satPool(r);
+    link = '<select data-act="sat-pick" data-key="' + esc(r.respKey) + '"><option value="">— 선택 안 함 —</option>' + cand.map(function (eid) { return '<option value="' + esc(eid) + '"' + (SAT.sel[r.respKey] === eid ? ' selected' : '') + '>' + esc(satEnrLabel(eid)) + '</option>'; }).join('') + '</select>';
+  }
+  var ign = (r.decision === 'synced' || r.decision === 'already' || r.decision === 'duplicate' || r.decision === 'no_name' || r.decision === 'auto') ? '' : '<input type="checkbox" data-act="sat-ign" data-key="' + esc(r.respKey) + '" ' + (SAT.ign[r.respKey] ? 'checked' : '') + ' title="이 응답은 연결하지 않고 무시">';
+  return '<tr><td>' + who + '</td><td><span class="chip ' + t[1] + '">' + esc(t[0]) + '</span></td><td>' + link + '</td><td class="c">' + ign + '</td></tr>';
+}
+/** 후보가 없는 응답에서 직접 고를 수 있는 참여 기록: 연결된 회차가 있으면 그 회차, 없으면 그 프로그램 전체 (취소·불합격 제외) */
+function satPool(r) {
+  var sids = {};
+  S.boot.sessions.forEach(function (s) { if (s.program_id === SAT.prog && (!r.session_id || s.session_id === r.session_id)) sids[s.session_id] = true; });
+  return S.boot.enrollments.filter(function (e) { return sids[e.session_id] && !isCancelled(e) && e.pass !== '불합격'; })
+    .sort(function (a, b) { return String((X.person[a.person_id] || {}).name).localeCompare(String((X.person[b.person_id] || {}).name), 'ko'); }).slice(0, 80).map(function (e) { return e.enroll_id; });
+}
+
+function satLoad() {
+  SAT.loading = true; SAT.error = ''; SAT.result = null; SAT.sel = {}; SAT.ign = {}; SAT.off = {}; render();
+  api('previewSatisfaction', SAT.prog).then(function (d) { SAT.loading = false; SAT.data = d; render(); })
+    .catch(function (err) { SAT.loading = false; SAT.data = null; SAT.error = err.msg; render(); });
+}
+function satApply() {
+  if (SAT.busy || !SAT.data) return;
+  var items = [];
+  SAT.data.rows.forEach(function (r) {
+    if (r.decision === 'auto' && !SAT.off[r.respKey]) items.push({ respKey: r.respKey, enroll_id: r.enroll_id });
+    else if (SAT.sel[r.respKey]) items.push({ respKey: r.respKey, enroll_id: SAT.sel[r.respKey] });
+    else if (SAT.ign[r.respKey] && r.decision !== 'auto') items.push({ respKey: r.respKey, ignore: true });
+  });
+  if (!items.length) return;
+  SAT.busy = true; render();
+  api('applySatisfaction', SAT.prog, items).then(function (res) {
+    SAT.busy = false; SAT.result = res; SAT.data = null; return loadBoot();
+  }).catch(function (err) { SAT.busy = false; render(); fail(err); });
+}
+function satUnlink(key) {
+  openModal({ title: '연결 풀기', html: '<p>이 응답의 연결을 풀고, 다른 연결이 없다면 그 참여 기록의 만족도 "응답함" 표시도 지울까요?</p>', yes: '연결 풀기', danger: true }, function () {
+    api('unlinkResponse', key).then(function () { toast('연결을 풀었어요'); return loadBoot().then(function () { satLoad(); }); }).catch(fail);
+  });
+}
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!t || t.disabled) return;
+  var a = t.getAttribute('data-act');
+  if (a.indexOf('sat-') !== 0) return;
+  if (a === 'sat-prog') { SAT.prog = t.getAttribute('data-id'); SAT.data = null; SAT.error = ''; SAT.result = null; SAT.sel = {}; SAT.ign = {}; SAT.off = {}; render(); }
+  else if (a === 'sat-load') satLoad();
+  else if (a === 'sat-apply') satApply();
+  else if (a === 'sat-unlink') satUnlink(t.getAttribute('data-key'));
+});
+document.addEventListener('change', function (ev) {
+  var el = ev.target; if (!el || !el.getAttribute) return;
+  if (el.id === 'sat-showdone') { SAT.showDone = el.checked; render(); return; }
+  var act = el.getAttribute('data-act'), key = el.getAttribute('data-key');
+  if (act === 'sat-auto') { if (el.checked) delete SAT.off[key]; else SAT.off[key] = true; render(); }
+  else if (act === 'sat-pick') { if (el.value) { SAT.sel[key] = el.value; delete SAT.ign[key]; } else delete SAT.sel[key]; render(); }
+  else if (act === 'sat-ign') { if (el.checked) { SAT.ign[key] = true; delete SAT.sel[key]; } else delete SAT.ign[key]; render(); }
+});
+</script>

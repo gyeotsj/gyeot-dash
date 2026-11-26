@@ -121,6 +121,36 @@ function ensureTabs_(ss, schema, report) {
   });
 }
 
+/**
+ * 스키마 확장 (소유자 전용). 새 버전에서 추가된 열(예: 참여 기록의 만족도 응답일 sat_at)을 기존 시트 머리글 맨 뒤에 덧붙인다.
+ * 기존 열·데이터는 건드리지 않는다. 머리글이 정의의 앞부분과 다르면 그 탭은 건드리지 않고 알린다. 여러 번 실행해도 안전하다.
+ * 반환: { added: [{ tab, cols }], warnings }
+ */
+function migrateSchema() {
+  requireOwner_();
+  var out = withLock_(function () {
+    var db = openDb_(), res = { added: [], warnings: [] };
+    Object.keys(SCHEMA).forEach(function (tab) {
+      var def = SCHEMA[tab], sh = db.getSheetByName(tab);
+      if (!sh) { res.warnings.push(tab + ' 탭이 없어요 (setup 을 실행해 주세요)'); return; }
+      var header = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), def.cols.length)).getValues()[0];
+      var p = planSchemaMigration(def.cols, header);
+      if (p.problem) { res.warnings.push(tab + ': ' + p.problem); return; }
+      if (!p.add.length) return;
+      if (sh.getMaxColumns() < def.cols.length) sh.insertColumnsAfter(sh.getMaxColumns(), def.cols.length - sh.getMaxColumns());
+      var start = def.cols.length - p.add.length + 1;
+      p.add.forEach(function (c) {
+        if ((def.text || []).indexOf(c) >= 0) sh.getRange(1, def.cols.indexOf(c) + 1, sh.getMaxRows(), 1).setNumberFormat('@');
+      });
+      sh.getRange(1, start, 1, p.add.length).setValues([p.add]).setFontWeight('bold').setBackground('#e1f1ee');
+      res.added.push({ tab: tab, cols: p.add });
+    });
+    return res;
+  });
+  audit_('migrate_schema', '', out.added.length ? out.added.map(function (a) { return a.tab + ': ' + a.cols.join(','); }).join(' · ') : '변경 없음');
+  return out;
+}
+
 function tabLabel_(ss, tab) {
   return (ss.getName().indexOf('주민번호') >= 0 ? '주민번호 파일' : '운영 DB') + '/' + tab;
 }

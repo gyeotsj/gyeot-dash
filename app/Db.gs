@@ -21,6 +21,18 @@ function currentEmail_() {
   }
 }
 
+/**
+ * 코드를 실행하는 계정의 이메일. 웹앱에서는 접속한 사람 본인이고, 소유자가 만든 시간 트리거에서는 소유자다.
+ * 화면에서 부를 수 없어야 하는 함수(자동 정리)가 "소유자 트리거가 부른 것인지" 확인하는 데 쓴다.
+ */
+function effectiveEmail_() {
+  try {
+    return normalizeEmail(Session.getEffectiveUser().getEmail());
+  } catch (err) {
+    return '';
+  }
+}
+
 function nowStr_() {
   return formatKst(new Date());
 }
@@ -38,8 +50,14 @@ function openDb_() {
   return DB_CACHE_;
 }
 
+var RRN_CACHE_ = null;
+/**
+ * 주민번호 파일. 한 번의 실행 안에서는 다시 열지 않는다.
+ * 서버 자체 시험(SelfTest.gs)은 RRN_CACHE_ 를 임시 파일로 바꿔 끼워서, 실제 주민번호 파일을 건드리지 않는다. (R7)
+ */
 function openRrn_() {
-  return SpreadsheetApp.openById(propOrThrow_('RRN_ID'));
+  if (!RRN_CACHE_) RRN_CACHE_ = SpreadsheetApp.openById(propOrThrow_('RRN_ID'));
+  return RRN_CACHE_;
 }
 
 /** 쓰기 작업을 한 번에 한 명씩만 하도록 잠근다 */
@@ -177,6 +195,40 @@ function bulkUpdateUnlocked_(tab, shouldUpdate, buildPatch, email) {
   });
   if (changedRows.length) range.setValues(values);
   return changedRows;
+}
+
+/**
+ * 여러 행의 칸을 한 번에 고친다 (탭을 한 번만 읽고 한 번만 쓴다). 잠금은 호출한 쪽에서.
+ * patchesById: { 키: { 열: 값 } }. 실제로 바뀐 행에만 updated_at·updated_by 를 서버가 채운다.
+ * 반환: 바뀐 행 수
+ */
+function bulkPatchByIdUnlocked_(tab, patchesById, email) {
+  var ids = Object.keys(patchesById);
+  if (!ids.length) return 0;
+  var sh = openDb_().getSheetByName(tab), def = SCHEMA[tab], cols = def.cols;
+  var last = sh.getLastRow();
+  if (last < 2) return 0;
+  var range = sh.getRange(2, 1, last - 1, cols.length);
+  var values = range.getValues();
+  var keyIdx = cols.indexOf(def.key), uAt = cols.indexOf('updated_at'), uBy = cols.indexOf('updated_by');
+  var now = nowStr_(), n = 0;
+  values.forEach(function (row) {
+    var patch = patchesById[String(row[keyIdx])];
+    if (!patch) return;
+    var changed = false;
+    Object.keys(patch).forEach(function (k) {
+      var idx = cols.indexOf(k);
+      if (idx < 0) throw new Error('알 수 없는 열: ' + k);
+      if (String(row[idx]) !== String(patch[k])) { row[idx] = patch[k]; changed = true; }
+    });
+    if (changed) {
+      if (uAt >= 0) row[uAt] = now;
+      if (uBy >= 0) row[uBy] = email || '';
+      n++;
+    }
+  });
+  if (n) range.setValues(values);
+  return n;
 }
 
 /** Config 값을 쓴다 (있으면 고치고 없으면 추가). 잠금은 호출한 쪽에서. */

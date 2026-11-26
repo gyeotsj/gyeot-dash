@@ -50,7 +50,11 @@ function replaceIn(list, key, row) {
   for (var i = 0; i < list.length; i++) { if (list[i][key] === row[key]) { list[i] = row; return; } }
   list.push(row);
 }
-function replaceEnr(row) { replaceIn(S.boot.enrollments, 'enroll_id', row); }
+/** 서버가 붙인 안내(_warn, 예: 주민번호를 지우지 못했어요)는 보여 주고 데이터에는 남기지 않는다 */
+function replaceEnr(row) {
+  if (row._warn) { toast(row._warn); delete row._warn; }
+  replaceIn(S.boot.enrollments, 'enroll_id', row);
+}
 function replacePerson(row) { replaceIn(S.boot.people, 'person_id', row); X.person[row.person_id] = row; }
 function replaceSession(row) { replaceIn(S.boot.sessions, 'session_id', row); X.session[row.session_id] = row; }
 function defaultSid() {
@@ -123,25 +127,32 @@ function render() {
   var root = document.getElementById('root'); if (!root) return;
   if (!S.boot) { root.innerHTML = '<div class="loading">불러오는 중…</div>'; return; }
   var y = window.scrollY;
-  var screens = { dash: dashHtml, sess: sessHtml, people: peopleHtml, sessions: sessionsHtml, imp: importHtml, staff: staffHtml };
+  var screens = { dash: dashHtml, sess: sessHtml, people: peopleHtml, sessions: sessionsHtml, imp: importHtml, staff: staffHtml, apply: applyHtml, send: sendHtml, status: statusHtml };
   root.innerHTML = '<div class="app">' + sideHtml() + '<main>' + (screens[S.screen] || dashHtml)() + '</main></div>' + overlayHtml();
   window.scrollTo(0, y);
 }
 
 function sideHtml() {
-  var items = [['dash', '홈 대시보드', 'home'], ['sess', '회차 상세', 'cal'], ['people', '참여자', 'users'], ['sessions', '회차 관리', 'list']];
-  if (isOwner()) { items.push(['imp', '기존 엑셀 이관', 'up']); items.push(['staff', '운영진 관리', 'key']); }
-  var me = S.boot.me;
-  return '<aside class="side"><div class="brand"><div class="logo">곁</div><div><b>곁마을 운영</b><span>내부 운영진 전용</span></div></div>' +
-    '<div class="nav-label">메뉴</div>' +
-    items.map(function (x) { return '<button class="nav ' + (S.screen === x[0] ? 'on' : '') + '" data-act="nav" data-to="' + x[0] + '">' + IC[x[2]] + '<span>' + x[1] + '</span></button>'; }).join('') +
+  // 메뉴는 일하는 순서대로 묶는다: 보기 → 작업 → (소유자) 관리
+  var groups = [
+    ['보기', [['dash', '홈 대시보드', 'home'], ['sess', '회차 상세', 'cal'], ['people', '참여자', 'users']]],
+    ['작업', [['apply', '신청 엑셀 업로드', 'up'], ['send', '문자·메일 발송 준비', 'send'], ['sessions', '회차 관리', 'list']]]
+  ];
+  if (isOwner()) groups.push(['관리 (소유자)', [['staff', '운영진 관리', 'key'], ['status', '시스템 상태', 'shield'], ['imp', '기존 엑셀 이관', 'archive']]]);
+  var me = S.boot.me, urgent = urgentTodoCount(S.boot);
+  var nav = groups.map(function (g) {
+    return '<div class="nav-label">' + esc(g[0]) + '</div>' + g[1].map(function (x) {
+      return '<button class="nav ' + (S.screen === x[0] ? 'on' : '') + '" data-act="nav" data-to="' + x[0] + '">' + IC[x[2]] + '<span>' + x[1] + '</span>' + (x[0] === 'dash' && urgent ? '<span class="bd" title="긴급한 할 일">' + urgent + '</span>' : '') + '</button>';
+    }).join('');
+  }).join('');
+  return '<aside class="side"><div class="brand"><div class="logo">곁</div><div><b>곁마을 운영</b><span>내부 운영진 전용</span></div></div>' + nav +
     '<div class="side-foot"><b>' + esc(me.name) + '</b> · ' + (me.role === 'owner' ? '소유자' : '운영진') + '<br>' + esc(me.email) + '<br>버전 ' + esc(typeof APP_VERSION === 'undefined' ? '' : APP_VERSION) + '</div></aside>';
 }
-
 function overlayHtml() {
   var out = '';
   if (S.drawer) out += drawerHtml();
   if (S.sf) out += sessionFormHtml();
+  if (S.ins) out += insureHtml();
   if (S.modal) out += modalHtml();
   return out;
 }
@@ -156,11 +167,13 @@ function dashHtml() {
     return '<div class="card kpi"><div class="l">' + label + '</div><div class="v">' + main + '</div><div class="d">' + desc + '</div>' +
       (bar != null ? '<div class="bar"><i style="width:' + bar + '%"></i></div>' : '') + '</div>';
   }
+  var sk = satKpi(b);
   var cards =
     kpi('2주 안에 참여하는 사람', k.upcoming ? k.upcoming.people + '<small>명</small>' : '–', k.upcoming ? k.upcoming.sessions + '개 회차 진행 예정' : '진행 예정 회차가 없어요') +
     kpi('참가비 입금 완료율', k.pay ? pct(k.pay.done, k.pay.total) + '<small>%</small>' : '–', k.pay ? '3주 안 회차 ' + k.pay.done + '/' + k.pay.total + '명' : '3주 안에 시작하는 회차가 없어요', k.pay ? pct(k.pay.done, k.pay.total) : null) +
     kpi('여행자보험 가입률', k.ins ? pct(k.ins.done, k.ins.total) + '<small>%</small>' : '–', k.ins ? '2주 안 회차 ' + k.ins.done + '/' + k.ins.total + '명' : '2주 안에 시작하는 회차가 없어요', k.ins ? pct(k.ins.done, k.ins.total) : null) +
-    kpi('종료 회차 참석 정리', k.attend ? pct(k.attend.done, k.attend.total) + '<small>%</small>' : '–', k.attend ? '참석·불참 입력 ' + k.attend.done + '/' + k.attend.total + '명' : '종료된 회차가 없어요', k.attend ? pct(k.attend.done, k.attend.total) : null);
+    kpi('종료 회차 참석 정리', k.attend ? pct(k.attend.done, k.attend.total) + '<small>%</small>' : '–', k.attend ? '참석·불참 입력 ' + k.attend.done + '/' + k.attend.total + '명' : '종료된 회차가 없어요', k.attend ? pct(k.attend.done, k.attend.total) : null) +
+    kpi('만족도 응답률', sk ? pct(sk.done, sk.total) + '<small>%</small>' : '–', sk ? '참석자 ' + sk.done + '/' + sk.total + '명 응답' : '시작한 회차에 참석자가 없어요', sk ? pct(sk.done, sk.total) : null);
 
   var rows = list.map(function (s) {
     var st = sessionState(s, t), a = activeOf(b.enrollments, s.session_id), c = cancelledOf(b.enrollments, s.session_id);
@@ -181,7 +194,33 @@ function dashHtml() {
   return '<div class="top"><div><h1>홈 대시보드</h1><div class="sub">모집부터 참여까지, 회차가 지금 어디까지 진행됐는지 한눈에 봅니다.</div></div><div class="sp"></div>' +
     '<div class="acts"><div class="seg">' + progs.map(function (p) { return '<button class="' + (S.prog === p[0] ? 'on' : '') + '" data-act="prog" data-id="' + esc(p[0]) + '">' + esc(p[1]) + '</button>'; }).join('') + '</div>' +
     '<button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button></div></div>' +
-    '<div class="grid g4" style="margin-bottom:16px">' + cards + '</div>' + table;
+    '<div class="grid g5" style="margin-bottom:16px">' + cards + '</div>' +
+    '<div class="grid g-main">' + table + todoPanelHtml() + '</div>';
+}
+
+/* ===================== 홈 대시보드의 할 일 패널 ===================== */
+function todoItemHtml(t) {
+  var s = X.session[t.sid]; if (!s) return '';
+  var b = S.boot, label = esc(progName(s.program_id)) + ' ' + esc(s.n) + '회차';
+  var when = t.days < 0 ? Math.abs(t.days) + '일 지남' : t.days === 0 ? '오늘 시작' : 'D-' + t.days;
+  var sub = label + ' · ' + when;
+  if (t.kind === 'refund') { var rdd = diffDays(refundDeadline(s, b.config.refund_days), b.today); sub = label + ' · 환불 기한 ' + (rdd === 0 ? '오늘까지' : '내일까지'); }
+  var sid = esc(t.sid);
+  var detail = '<button class="btn sm" data-act="sess" data-sid="' + sid + '">회차 상세</button>';
+  var send = function (stage, txt) { return '<button class="btn sm" data-act="send-open" data-sid="' + sid + '" data-stage="' + stage + '">' + txt + '</button>'; };
+  var act = t.kind === 'ins' ? '<button class="btn sm" data-act="ins-open" data-sid="' + sid + '">보험사 명단</button> ' + detail
+    : t.kind === 'pay' ? send('pay', '입금 요청 문자') + ' ' + detail
+    : t.kind === 'm1' ? send('m1', '1차 안내 준비')
+    : t.kind === 'sat' ? send('sat', '만족도 요청 준비') + ' ' + detail
+    : detail;
+  var cls = t.sev === 'bad' ? 'bad' : t.sev === 'warn' ? 'warn' : 'pri';
+  return '<div class="todo"><div class="ti ' + cls + '">' + (t.sev === 'pri' ? IC.list : IC.warn) + '</div><div style="min-width:0;flex:1"><b>' + esc(todoTitle(t.kind, t.n)) + '</b><small>' + sub + '</small><div class="row" style="gap:6px">' + act + '</div></div></div>';
+}
+function todoPanelHtml() {
+  var list = todoList(S.boot), urgent = list.filter(function (t) { return t.sev === 'bad'; }).length;
+  var rows = list.slice(0, 12).map(todoItemHtml).join('');
+  return '<div class="card"><div class="card-h"><h2>할 일</h2>' + (urgent ? '<span class="chip bad dot">긴급 ' + urgent + '</span>' : '') + '<span class="chip">' + list.length + '건</span></div>' +
+    '<div class="card-b" style="padding-top:12px">' + (rows || '<div class="note">지금 급하게 할 일이 없어요.</div>') + (list.length > 12 ? '<div class="muted" style="font-size:12.5px;margin-top:10px">급한 순서로 12건만 보여요.</div>' : '') + '</div></div>';
 }
 
 /* ===================== 회차 상세 ===================== */
@@ -230,10 +269,12 @@ function sessHtml() {
     var trans = '<td data-act="none"><select class="tsel ' + (e.transport && e.transport !== '자차' ? 'warn' : '') + '" data-act="transport" data-eid="' + esc(e.enroll_id) + '"' + (cx || S.pending[e.enroll_id] ? ' disabled' : '') + ' title="이동수단 변경">' +
       ['', '자차', '고속터미널', '시외터미널'].map(function (v) { return '<option value="' + v + '"' + (e.transport === v ? ' selected' : '') + '>' + (v || '미정') + '</option>'; }).join('') + '</select></td>';
     var steps = cx
-      ? '<td colspan="6" class="muted">취소 사유: ' + esc(e.cancel_reason) + (e.refund_amount !== '' ? ' · 환불 ' + esc(money(e.refund_amount)) : '') + '</td>'
+      ? '<td colspan="8" class="muted">취소 사유: ' + esc(e.cancel_reason) + (e.refund_amount !== '' ? ' · 환불 ' + esc(money(e.refund_amount)) : '') + '</td>'
       : '<td class="c" data-act="none"><span class="sb on fix" title="합격">' + IC.check + '</span></td>' +
         ['m1', 'pay', 'ins', 'm2'].map(function (k) { return '<td class="c" data-act="none">' + stepBtn(e, k) + '</td>'; }).join('') +
-        '<td class="c" data-act="none">' + attendBtn(e) + '</td>';
+        '<td class="c" data-act="none">' + attendBtn(e) + '</td>' +
+        '<td class="c" data-act="none">' + (st.started ? stepBtn(e, 'sat') : '<span class="dash">–</span>') + '</td>' +
+        '<td class="c nw" data-act="none">' + rrnCell(e) + '</td>';
     return '<tr class="click ' + (cx ? 'cx' : '') + '" data-act="who" data-eid="' + esc(e.enroll_id) + '">' + nameCell + '<td class="muted nw">' + esc(p.phone) + '</td>' + trans + steps + '</tr>';
   }).join('');
 
@@ -241,11 +282,11 @@ function sessHtml() {
     '<div class="top"><div><h1>' + pchip(s.program_id) + ' <span style="margin-left:2px">' + esc(s.n) + '회차</span> &nbsp;' + stateChip(st) + '</h1>' +
     '<div class="sub">' + esc(fmtRange(s.start, s.end)) + ' · 참가비 ' + esc(money(s.fee) || '미정') + rdNote + '</div></div><div class="sp"></div>' +
     '<div class="acts"><div class="seg">' + sibs.map(function (x) { return '<button class="' + (x.session_id === s.session_id ? 'on' : '') + '" data-act="sess" data-sid="' + esc(x.session_id) + '">' + esc(x.n) + '회</button>'; }).join('') + '</div>' +
-    bulk + '<button class="btn" data-act="sf-edit" data-sid="' + esc(s.session_id) + '">' + IC.pencil + ' 회차 수정</button></div></div>' +
+    bulk + '<button class="btn" data-act="send-open" data-sid="' + esc(s.session_id) + '">' + IC.send + ' 문자·메일 발송 준비</button><button class="btn" data-act="ins-open" data-sid="' + esc(s.session_id) + '">보험사 명단</button>' + '<button class="btn" data-act="sf-edit" data-sid="' + esc(s.session_id) + '">' + IC.pencil + ' 회차 수정</button></div></div>' +
     cards +
     (all.length
-      ? '<div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>참여자</th><th>연락처</th><th>이동수단</th><th class="c">합격</th><th class="c">1차 안내</th><th class="c">입금</th><th class="c">보험</th><th class="c">최종 안내</th><th class="c">참석</th></tr></thead><tbody>' + body + '</tbody></table></div></div>' +
-        '<div class="muted" style="margin-top:10px;font-size:12.5px">체크 버튼을 누르면 단계가 완료/미완료로 바뀌고, 이동수단은 목록에서 바로 바꿀 수 있어요. 참석은 프로그램이 시작된 뒤에 누를 때마다 미정 → 참석 → 불참 순으로 바뀝니다. 이름을 누르면 상세 정보를 보고 수정할 수 있어요.</div>'
+      ? '<div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>참여자</th><th>연락처</th><th>이동수단</th><th class="c">합격</th><th class="c">1차 안내</th><th class="c">입금</th><th class="c">보험</th><th class="c">최종 안내</th><th class="c">참석</th><th class="c">만족도</th><th class="c">주민번호</th></tr></thead><tbody>' + body + '</tbody></table></div></div>' +
+        '<div class="muted" style="margin-top:10px;font-size:12.5px">체크 버튼을 누르면 단계가 완료/미완료로 바뀌고(만족도는 구글폼 응답 여부를 직접 표시), 이동수단은 목록에서 바로 바꿀 수 있어요. 참석은 프로그램이 시작된 뒤에 누를 때마다 미정 → 참석 → 불참 순으로 바뀝니다. 이름을 누르면 상세 정보를 보고 수정할 수 있어요.</div>'
       : '<div class="card"><div class="empty"><b>이 회차에는 아직 참여자가 없어요</b>신청 엑셀 업로드는 다음 단계(2단계)에서 제공됩니다.</div></div>');
 }
 
@@ -318,7 +359,8 @@ function drawerHtml() {
       '<dt>직업 · 거주지</dt><dd>' + esc([p.job, p.area].filter(String).join(' · ') || '–') + '</dd>' +
       '<dt>이동수단</dt><dd>' + transChip(e.transport) + (e.transport && e.transport !== '자차' ? ' <span class="muted" style="font-size:12.5px">운영진 픽업 필요</span>' : '') + '</dd>' +
       '<dt>입금 · 환불</dt><dd>' + esc(money(e.pay_amount) || '–') + (e.refund_amount !== '' ? ' / 환불 ' + esc(money(e.refund_amount)) : '') + '</dd>' +
-      '<dt>동의 항목</dt><dd>' + consentChip('추가 보유', p.consent_retain) + ' ' + consentChip('초상권', p.consent_portrait) + '</dd></dl>' +
+      '<dt>동의 항목</dt><dd>' + consentChip('추가 보유', p.consent_retain) + ' ' + consentChip('초상권', p.consent_portrait) + '</dd>' +
+      '<dt>주민번호</dt><dd>' + (rrnCell(e).indexOf('dash') >= 0 ? '<span class="muted">해당 없음 (취소·종료된 회차)</span>' : rrnCell(e)) + '</dd></dl>' +
       '<div class="sec">진행 단계</div><ul class="tl">' + tl + '</ul>' +
       '<div class="sec">남긴 말</div><div class="note">' + (e.memo ? esc(e.memo) : '남긴 말이 없어요.') + '</div>' +
       '<div class="sec">환불 안내</div><div class="note">' + refund + '</div>' +
@@ -407,7 +449,7 @@ function sessionsHtml() {
       (n === 0 ? '<button class="btn sm ghost" data-act="sf-del" data-sid="' + esc(s.session_id) + '">삭제</button>' : '') + '</td></tr>';
   }).join('');
   return '<div class="top"><div><h1>회차 관리</h1><div class="sub">회차를 추가하고 날짜·참가비·정원을 고칩니다. 참여 기록이 없는 회차만 삭제할 수 있어요.</div></div><div class="sp"></div>' +
-    '<button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button></div>' +
+    '<button class="btn pri" data-act="sf-new">' + IC.plus + ' 회차 추가</button></div>' + progSettingsHtml() +
     (list.length ? '<div class="card"><div class="scroll"><table class="tbl"><thead><tr><th>회차</th><th>일정</th><th>상태</th><th>참가비</th><th>정원</th><th>기록</th><th>메모</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>'
       : '<div class="card"><div class="empty"><b>아직 회차가 없어요</b>위의 "회차 추가"로 첫 회차를 만들어 보세요.</div></div>');
 }
@@ -681,7 +723,11 @@ document.addEventListener('click', function (ev) {
     case 'imp-commit': commitImport(); break;
     case 'imp-undo': undoImportConfirm(); break;
     case 'modal-no': closeModal(); break;
-    case 'modal-yes': { var fn = MODAL_FN; S.modal = null; MODAL_FN = null; render(); if (fn) fn(); break; }
+    case 'modal-yes': {   // collect 가 있는 창(주민번호 입력)은 닫기 전에 입력값을 읽고, false 를 돌려주면 닫지 않는다
+      var fn = MODAL_FN, got;
+      if (S.modal && S.modal.collect) { got = S.modal.collect(); if (got === false) break; }
+      S.modal = null; MODAL_FN = null; render(); if (fn) fn(got); break;
+    }
     case 'reload': loadBoot(); break;
   }
 });
@@ -721,6 +767,7 @@ document.addEventListener('keydown', function (ev) {
     if (P.sf) S.sf = P.sf;
     if (P.imp) S.imp = P.imp;
     if (P.modal) { S.modal = P.modal; }
+    if (P.ins && typeof insOpen === 'function') insOpen(P.ins);
     render();
   });
 })();

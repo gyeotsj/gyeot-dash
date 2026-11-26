@@ -28,7 +28,7 @@ body{background:var(--bg);color:var(--ink);font:14px/1.5 "Pretendard Variable","
 button{font:inherit;color:inherit;cursor:pointer}
 .app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
 /* sidebar */
-.side{background:var(--surface);border-right:1px solid var(--line);padding:20px 14px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:6px}
+.side{background:var(--surface);border-right:1px solid var(--line);padding:20px 14px;position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
 .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
 .logo{width:34px;height:34px;border-radius:10px;background:var(--pri);color:var(--pri-ink);display:grid;place-items:center;font-weight:800;font-size:17px}
 .brand b{display:block;font-size:15px;letter-spacing:-.2px}
@@ -67,6 +67,7 @@ main{padding:26px 32px 60px;min-width:0;max-width:1320px}
 .card-b{padding:14px 18px 18px}
 .grid{display:grid;gap:16px}
 .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g5{grid-template-columns:repeat(5,minmax(0,1fr))}
 .g-main{grid-template-columns:minmax(0,1fr) 340px;align-items:start}
 .kpi{padding:16px 18px}
 .kpi .l{color:var(--muted);font-size:12.5px;font-weight:600}
@@ -194,10 +195,10 @@ label.f{display:block;font-size:12.5px;font-weight:700;color:var(--ink2);margin:
 #toast.show{opacity:1;transform:translate(-50%,0)}
 .tag-sample{font-size:12px;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:4px 11px;font-weight:600}
 @media (max-width:1100px){
-  .g4{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .g-main,.two{grid-template-columns:1fr}
+  .g4,.g5{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g-main,.two{grid-template-columns:minmax(0,1fr)}
   .sum{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .three{grid-template-columns:1fr}
+  .three{grid-template-columns:minmax(0,1fr)}
 }
 @media (max-width:760px){
   .app{grid-template-columns:1fr}

@@ -1,0 +1,214 @@
+<script>
+/**
+ * 문자·메일 발송 준비 화면. 실제 발송은 하지 않는다 (알리고 단체문자·메일은 운영진이 직접 보낸다).
+ * 대상과 문구를 만들어 복사하고, 보냈다고 기록하면 발송 기록에 남기고 1차·최종 안내 단계를 완료로 표시한다.
+ * 문구는 {이름} 같은 자리표시자 상태로만 저장·기록된다. 받는 사람의 이름·연락처는 기록하지 않는다.
+ */
+IC.send = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3L11 14"/><path d="M22 3l-7 19-4-8-8-4z"/></svg>';
+IC.copy = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg>';
+
+function sendInit(sid, stage) {
+  if (!STAGE_INFO[stage]) stage = 'm1';
+  var id = X.session[sid] ? sid : (S.sid && X.session[S.sid] ? S.sid : defaultSid());
+  S.send = { sid: id, stage: stage, filter: STAGE_INFO[stage].filter, channel: STAGE_INFO[stage].ch, body: null, saveName: '', saveStage: null, saveProg: null, libStage: 'cur', libProg: 'cur', mark: true, busy: false };
+}
+function sBody() {
+  var o = S.send; if (o.body != null) return o.body;
+  var s = X.session[o.sid], x = s ? pickSavedTemplate(S.boot.templates || [], o.stage, s.program_id) : null;
+  return x ? x.body : '';
+}
+function sTargets() { var o = S.send; return messageTargets(S.boot.enrollments, o.sid, o.filter); }
+function sCtx(e) {
+  var o = S.send, s = X.session[o.sid] || {}, p = X.person[e.person_id] || {}, pr = X.prog[s.program_id] || {};
+  return { name: p.name, program: progName(s.program_id), n: s.n, start: s.start, end: s.end, fee: s.fee, refundDeadline: s.start ? refundDeadline(s, S.boot.config.refund_days) : '', transport: e.transport, formUrl: pr.form_url || '' };
+}
+function sPreview() {
+  var o = S.send, T = sTargets(), body = sBody(), first = T[0];
+  var r = first ? fillTemplate(body, sCtx(first)) : { text: body, missing: [] };
+  var s = X.session[o.sid] || {};
+  if (!first && body) r.missing = fillTemplate(body, { name: 'x', program: 'x', n: s.n, start: s.start, end: s.end, fee: s.fee, refundDeadline: s.start ? refundDeadline(s, S.boot.config.refund_days) : '', transport: 'x', formUrl: (X.prog[s.program_id] || {}).form_url || '' }).missing;
+  var len = r.text.length;
+  var info = (first ? esc((X.person[first.person_id] || {}).name) + '님 기준 미리보기 · ' : '') + len + '자 ' + (o.channel === 'sms' ? (smsKind(r.text) === 'LMS' ? '<span class="chip warn">장문(LMS)</span>' : '<span class="chip">단문</span>') : '');
+  return { text: r.text, missing: r.missing, info: info };
+}
+function sFormWarning(pv) {
+  var o = S.send, s = X.session[o.sid] || {};
+  if (pv.missing.indexOf('폼링크') < 0) return '';
+  return '<div class="ban warn" style="margin:10px 0 0">' + IC.warn + '<div class="sp"><b>' + esc(progName(s.program_id)) + '의 만족도 폼 링크가 아직 없어요.</b> 문구의 {폼링크}가 그대로 남아요. ' +
+    '<a data-act="nav" data-to="sessions" style="color:var(--pri);cursor:pointer;font-weight:700">회차 관리의 프로그램 설정</a>에서 링크를 입력해 주세요.</div></div>';
+}
+
+function sendHtml() {
+  if (!S.send) sendInit(S.sid);
+  var o = S.send, b = S.boot, T = sTargets(), body = sBody(), pv = sPreview();
+  var sessions = sortSessions(b.sessions, b.today);
+  var s = X.session[o.sid];
+  var saveStage = o.saveStage || o.stage, saveProg = o.saveProg || (s ? s.program_id : 'all');
+  var lib = filterLibrary(b.templates || [], o.stage, s ? s.program_id : 'all', o.libStage, o.libProg).sort(function (x, y) { return String(y.saved_at) < String(x.saved_at) ? -1 : 1; });
+  var stageOpts = function (sel) { return Object.keys(STAGE_INFO).map(function (k) { return '<option value="' + k + '"' + (k === sel ? ' selected' : '') + '>' + esc(STAGE_INFO[k].name) + '</option>'; }).join(''); };
+  var sms = o.channel === 'sms';
+  var noContact = 0;
+  var rcpt = T.map(function (e) {
+    var p = X.person[e.person_id] || {}, v = sms ? p.phone : p.email;
+    if (!v) noContact++;
+    return '<div><span>' + esc(p.name) + '</span><span class="muted" style="display:flex;gap:8px;align-items:center">' + (v ? esc(v) : '<i>' + (sms ? '연락처' : '이메일') + ' 없음</i>') +
+      '<button class="btn sm ghost" data-act="sd-copy-one" data-eid="' + esc(e.enroll_id) + '" title="이 사람 기준으로 채운 문구 복사">' + IC.copy + '</button></span></div>';
+  }).join('');
+  var copyable = T.length - noContact;
+
+  var libHtml = lib.length ? lib.map(function (x) {
+    var proj = x.program_id === 'all' ? '공통' : esc(PROG_LABEL[x.program_id] || x.program_id);
+    return '<div class="todo" style="align-items:center"><div style="min-width:0;flex:1"><b>' + esc(x.name) + '</b>' +
+      '<div style="margin:4px 0 5px;display:flex;gap:5px;flex-wrap:wrap"><span class="chip pri">' + esc((STAGE_INFO[x.stage] || {}).name || x.stage) + '</span><span class="chip">' + proj + '</span><span class="chip">' + esc(CHANNEL_LABEL[x.channel] || x.channel) + '</span><span class="muted" style="font-size:12px">' + esc(String(x.saved_at).slice(0, 10)) + ' 저장</span></div>' +
+      '<small>' + esc(String(x.body).length > 70 ? String(x.body).slice(0, 70) + '…' : x.body) + '</small></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><button class="btn sm pri" data-act="sd-use" data-id="' + esc(x.tpl_id) + '">불러오기</button><button class="btn sm ghost" data-act="sd-del" data-id="' + esc(x.tpl_id) + '">삭제</button></div></div>';
+  }).join('') : '<div class="note">조건에 맞는 저장한 문구가 없어요. 위에서 문구를 쓰고 저장해 보세요.</div>';
+
+  var hist = (b.messageLog || []).map(function (h) {
+    var hs = X.session[h.session_id];
+    return '<tr><td class="muted nw">' + esc(String(h.at).slice(5, 16)) + '</td><td class="nw">' + (hs ? pchip(hs.program_id) + ' ' + esc(hs.n) + '회차' : esc(h.session_id)) + '</td>' +
+      '<td class="nw"><span class="chip pri">' + esc((STAGE_INFO[h.stage] || {}).name || h.stage) + '</span></td><td class="nw"><span class="chip">' + esc(CHANNEL_LABEL[h.channel] || h.channel) + '</span></td><td class="nw"><b>' + esc(h.count) + '</b>명</td>' +
+      '<td style="color:var(--ink2);min-width:280px">' + esc(String(h.body).length > 90 ? String(h.body).slice(0, 90) + '…' : h.body) + '</td>' +
+      '<td class="nw" style="text-align:right"><button class="btn sm" data-act="sd-hist-use" data-id="' + esc(h.log_id) + '">다시 쓰기</button> <button class="btn sm ghost" data-act="sd-hist-save" data-id="' + esc(h.log_id) + '">저장</button></td></tr>';
+  }).join('');
+
+  return '<div class="top"><div><h1>문자·메일 발송 준비</h1><div class="sub">대상과 문구를 만들어 복사한 뒤, 알리고에서 직접 발송하세요. 자주 쓰는 문구는 단계·프로그램별로 저장해 두고 다시 불러올 수 있어요.</div></div></div>' +
+    (sessions.length ? '' : '<div class="card"><div class="empty"><b>아직 회차가 없어요</b>회차를 먼저 추가해 주세요.</div></div>') +
+    (sessions.length ? '<div class="two"><div class="stack">' +
+      '<div class="card card-b"><div class="row">' +
+      '<div><label class="f">회차</label><select id="sd-s">' + sessions.map(function (z) { return '<option value="' + esc(z.session_id) + '"' + (z.session_id === o.sid ? ' selected' : '') + '>' + esc(progName(z.program_id)) + ' ' + esc(z.n) + '회차 · ' + esc(fmtMD(z.start)) + '</option>'; }).join('') + '</select></div>' +
+      '<div><label class="f">대상</label><select id="sd-f">' + Object.keys(FILTER_TEXT).map(function (k) { return '<option value="' + k + '"' + (k === o.filter ? ' selected' : '') + '>' + esc(FILTER_TEXT[k]) + '</option>'; }).join('') + '</select></div>' +
+      '<div><label class="f">방식</label><div class="seg"><button data-act="sd-ch" data-v="sms" class="' + (sms ? 'on' : '') + '">문자</button><button data-act="sd-ch" data-v="mail" class="' + (!sms ? 'on' : '') + '">메일</button></div></div></div></div>' +
+      '<div class="card card-b"><div class="row" style="justify-content:space-between;margin-bottom:10px"><b>문구</b><div class="seg">' +
+      Object.keys(STAGE_INFO).map(function (k) { return '<button data-act="sd-stage" data-v="' + k + '" class="' + (k === o.stage ? 'on' : '') + '">' + esc(STAGE_INFO[k].name) + '</button>'; }).join('') + '</div></div>' +
+      '<textarea id="msgbox" placeholder="문구를 직접 쓰거나, 아래 저장한 문구에서 불러오세요.">' + esc(body) + '</textarea>' +
+      '<div class="muted" style="font-size:12.5px;margin:6px 0 0">{이름} {프로그램} {회차} {날짜} {참가비} {환불기한} {이동수단} {폼링크}는 대상자마다 자동으로 바뀌어요. 문구는 이 상태 그대로 저장돼요.</div>' +
+      '<div id="sd-warn">' + sFormWarning(pv) + '</div>' +
+      '<div class="sec">미리보기</div><div class="note" id="pv" style="white-space:pre-wrap">' + (esc(pv.text) || '문구가 비어 있어요. 아래에서 저장한 문구를 불러오거나 직접 써 주세요.') + '</div>' +
+      '<div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted" style="font-size:12.5px" id="cnt">' + pv.info + '</span><button class="btn sm" data-act="sd-copy-msg">' + IC.copy + ' 문구 복사</button></div>' +
+      '<div class="muted" style="font-size:12px;margin-top:4px">복사되는 문구는 미리보기에 나온 첫 번째 대상자 기준이에요. 사람마다 다르게 보내려면 오른쪽 목록의 사람별 복사 버튼을 쓰세요.</div>' +
+      '<div class="sec">이 문구 저장하기</div><div class="row" style="gap:8px">' +
+      '<input type="text" id="sv-name" placeholder="저장 이름 (예: 일해보기 최종 안내)" maxlength="60" value="' + esc(o.saveName) + '" style="flex:1;min-width:190px">' +
+      '<select id="sv-stage">' + stageOpts(saveStage) + '</select>' +
+      '<select id="sv-prog">' + Object.keys(PROG_LABEL).map(function (k) { return '<option value="' + k + '"' + (k === saveProg ? ' selected' : '') + '>' + (k === 'all' ? '모든 프로그램 공통' : esc(PROG_LABEL[k])) + '</option>'; }).join('') + '</select>' +
+      '<button class="btn pri" data-act="sd-save"' + (o.busy ? ' disabled' : '') + '>' + IC.check.replace('<svg', '<svg width="16" height="16"') + ' 저장</button></div>' +
+      '<div class="muted" style="font-size:12.5px;margin-top:6px">같은 이름·단계·프로그램으로 저장하면 기존 문구를 덮어써요.</div></div>' +
+      '<div class="card"><div class="card-h"><h2>저장한 문구</h2><span class="chip">' + lib.length + '개</span><div class="sp"></div>' +
+      '<select id="lib-stage"><option value="cur"' + (o.libStage === 'cur' ? ' selected' : '') + '>현재 단계 (' + esc(STAGE_INFO[o.stage].name) + ')</option><option value="every"' + (o.libStage === 'every' ? ' selected' : '') + '>전체 단계</option>' +
+      Object.keys(STAGE_INFO).map(function (k) { return '<option value="' + k + '"' + (o.libStage === k ? ' selected' : '') + '>' + esc(STAGE_INFO[k].name) + '</option>'; }).join('') + '</select>' +
+      '<select id="lib-prog"><option value="cur"' + (o.libProg === 'cur' ? ' selected' : '') + '>현재 프로그램 + 공통</option><option value="every"' + (o.libProg === 'every' ? ' selected' : '') + '>전체 프로그램</option>' +
+      Object.keys(PROG_LABEL).map(function (k) { return '<option value="' + k + '"' + (o.libProg === k ? ' selected' : '') + '>' + esc(PROG_LABEL[k]) + '만</option>'; }).join('') + '</select></div>' +
+      '<div class="card-b" style="padding-top:8px">' + libHtml + '</div></div>' +
+      '</div><div class="stack"><div class="card card-b"><div class="row" style="justify-content:space-between;margin-bottom:10px"><b>' + (sms ? '수신 번호' : '수신 메일') + ' <span class="chip pri">' + T.length + '명</span></b>' +
+      '<button class="btn sm pri" data-act="sd-copy-rcpt"' + (copyable ? '' : ' disabled') + '>' + IC.copy + ' ' + (sms ? '번호' : '메일') + ' ' + copyable + '건 복사</button></div>' +
+      (T.length ? '<div class="rcpt">' + rcpt + '</div>' + (noContact ? '<div class="muted" style="font-size:12.5px;margin-top:6px">' + (sms ? '연락처' : '이메일') + '가 없는 ' + noContact + '명은 복사에서 빠져요.</div>' : '') : '<div class="note">이 조건에 해당하는 사람이 없어요.</div>') +
+      ((o.stage === 'm1' || o.stage === 'm2') && T.length ? '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input type="checkbox" id="sd-mark" ' + (o.mark ? 'checked' : '') + ' style="margin-top:3px"> <span>기록하면 대상 ' + T.length + '명을 <b>' + esc(STAGE_INFO[o.stage].name) + ' 완료</b>로 표시해요</span></label>' : '') +
+      '<div class="row" style="margin-top:14px"><button class="btn" data-act="sd-log"' + (T.length && body.trim() && !o.busy ? '' : ' disabled') + '>' + IC.check.replace('<svg', '<svg width="16" height="16"') + ' 발송 완료로 기록</button><span class="muted" style="font-size:12.5px">보낸 문구도 함께 기록돼요 (받는 사람은 인원 수만)</span></div></div></div></div>' : '') +
+    '<div class="card" style="margin-top:16px"><div class="card-h"><h2>발송 기록</h2><span class="muted" style="font-size:12.5px">보낸 문구가 함께 남아요. "다시 쓰기"는 문구 입력칸으로 불러오고, "저장"은 저장한 문구에 추가해요.</span></div>' +
+    (hist ? '<div class="scroll"><table class="tbl" style="margin-top:12px"><thead><tr><th>시각</th><th>회차</th><th>단계</th><th>방식</th><th>인원</th><th>보낸 문구</th><th></th></tr></thead><tbody>' + hist + '</tbody></table></div>' : '<div class="card-b muted">아직 기록이 없어요.</div>') + '</div>';
+}
+
+/* ----- 복사 (구글 환경에서 막힐 수 있어 선택해서 복사하는 창을 함께 둔다) ----- */
+function copyText(text, doneMsg) {
+  var fallback = function () {
+    openModal({ title: '복사하는 창', html: '<p>자동 복사가 막혀 있어요. 아래 글을 선택해서(Ctrl+A) 복사(Ctrl+C)해 주세요.</p><textarea id="copy-fallback" readonly style="min-height:150px">' + esc(text) + '</textarea>', yes: '닫기' }, function () {});
+    setTimeout(function () { var t = document.getElementById('copy-fallback'); if (t) { t.focus(); t.select(); } }, 0);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(function () { toast(doneMsg); }, fallback); return; }
+  } catch (e) { /* 아래 방법으로 */ }
+  var ok = false;
+  try { var ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.parentNode.removeChild(ta); } catch (e2) { ok = false; }
+  if (ok) toast(doneMsg); else fallback();
+}
+
+function sendRefreshPreview() {
+  var pv = sPreview(), a = document.getElementById('pv'), c = document.getElementById('cnt'), w = document.getElementById('sd-warn');
+  if (a) a.textContent = pv.text || '문구가 비어 있어요. 아래에서 저장한 문구를 불러오거나 직접 써 주세요.';
+  if (c) c.innerHTML = pv.info;
+  if (w) w.innerHTML = sFormWarning(pv);
+  var lg = document.querySelector('[data-act="sd-log"]'); if (lg) lg.disabled = !(sTargets().length && sBody().trim()) || S.send.busy;
+}
+
+function sendSave() {
+  var o = S.send; if (o.busy) return;
+  var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+  var name = v('sv-name').trim(), body = sBody();
+  if (!name) { toast('저장할 이름을 입력해 주세요'); return; }
+  if (!body.trim()) { toast('문구가 비어 있어요'); return; }
+  if (looksLikeRrn(body) || looksLikeRrn(name)) { toast('주민번호처럼 보이는 값은 저장할 수 없어요'); return; }
+  o.saveName = name; o.saveStage = v('sv-stage'); o.saveProg = v('sv-prog'); o.busy = true; render();
+  api('saveTemplate', { name: name, stage: o.saveStage, program_id: o.saveProg, channel: o.channel, body: body }).then(function (row) {
+    o.busy = false; replaceIn(S.boot.templates, 'tpl_id', row); o.saveName = ''; toast('문구를 저장했어요'); render();
+  }).catch(function (err) { o.busy = false; render(); fail(err); });
+}
+function sendLog() {
+  var o = S.send; if (o.busy) return;
+  var T = sTargets(), body = sBody();
+  if (!T.length || !body.trim()) return;
+  var mark = (o.stage === 'm1' || o.stage === 'm2') && o.mark;
+  o.busy = true; render();
+  api('logMessage', o.sid, o.channel, o.stage, o.filter, body, mark).then(function (res) {
+    o.busy = false; S.boot.messageLog.unshift(res.log); S.boot.messageLog = S.boot.messageLog.slice(0, 50);
+    toast('발송 기록을 남겼어요 (' + res.count + '명' + (res.marked ? ', ' + res.marked + '명을 ' + STAGE_INFO[o.stage].name + ' 완료로 표시' : '') + ')');
+    if (res.marked) return loadBoot(); render();
+  }).catch(function (err) { o.busy = false; render(); fail(err); });
+}
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!t || t.disabled) return;
+  var a = t.getAttribute('data-act');
+  if (a.indexOf('sd-') !== 0 && a !== 'send-open') return;
+  var d = t.dataset, o = S.send;
+  switch (a) {
+    case 'send-open': sendInit(d.sid, d.stage); S.screen = 'send'; window.scrollTo(0, 0); render(); break;
+    case 'sd-ch': o.channel = d.v; render(); break;
+    case 'sd-stage': o.stage = d.v; o.filter = STAGE_INFO[d.v].filter; o.channel = STAGE_INFO[d.v].ch; o.body = null; o.saveStage = null; render(); break;
+    case 'sd-copy-msg': { var pv = sPreview(); if (!pv.text.trim()) { toast('복사할 문구가 없어요'); break; } copyText(pv.text, '문구를 복사했어요'); break; }
+    case 'sd-copy-one': {
+      var e = enrOf(d.eid); if (!e) break;
+      var r = fillTemplate(sBody(), sCtx(e)); copyText(r.text, (X.person[e.person_id] || {}).name + '님 문구를 복사했어요'); break;
+    }
+    case 'sd-copy-rcpt': {
+      var sms = o.channel === 'sms';
+      var list = sTargets().map(function (e) { var p = X.person[e.person_id] || {}; return sms ? p.phone : p.email; }).filter(String);
+      copyText(list.join(sms ? ',' : ', '), (sms ? '번호 ' : '메일 ') + list.length + '건을 복사했어요'); break;
+    }
+    case 'sd-save': sendSave(); break;
+    case 'sd-use': { var x = (S.boot.templates || []).filter(function (q) { return q.tpl_id === d.id; })[0]; if (x) { o.body = x.body; o.channel = x.channel; o.stage = x.stage; o.filter = STAGE_INFO[x.stage].filter; o.saveName = x.name; o.saveStage = x.stage; o.saveProg = x.program_id; render(); toast('문구를 불러왔어요'); } break; }
+    case 'sd-del': {
+      var y = (S.boot.templates || []).filter(function (q) { return q.tpl_id === d.id; })[0]; if (!y) break;
+      openModal({ title: '저장한 문구 삭제', html: '<p><b>' + esc(y.name) + '</b> 문구를 삭제할까요?</p>', yes: '삭제', danger: true }, function () {
+        api('deleteTemplate', y.tpl_id).then(function () { S.boot.templates = S.boot.templates.filter(function (q) { return q.tpl_id !== y.tpl_id; }); render(); toast('삭제했어요'); }).catch(fail);
+      }); break;
+    }
+    case 'sd-log': sendLog(); break;
+    case 'sd-hist-use': case 'sd-hist-save': {
+      var h = (S.boot.messageLog || []).filter(function (q) { return q.log_id === d.id; })[0]; if (!h) break;
+      if (X.session[h.session_id]) o.sid = h.session_id;
+      o.stage = h.stage; o.channel = h.channel; o.filter = STAGE_INFO[h.stage] ? STAGE_INFO[h.stage].filter : 'all'; o.body = h.body;
+      if (a === 'sd-hist-save') { o.saveStage = h.stage; o.saveName = ''; }
+      render(); window.scrollTo(0, 0);
+      if (a === 'sd-hist-save') setTimeout(function () { var n = document.getElementById('sv-name'); if (n) n.focus(); }, 0); else toast('문구 입력칸으로 불러왔어요');
+      break;
+    }
+  }
+});
+document.addEventListener('change', function (ev) {
+  var el = ev.target; if (!el || !S.send || S.screen !== 'send') return;
+  var o = S.send;
+  if (el.id === 'sd-s') { o.sid = el.value; o.body = null; render(); }
+  else if (el.id === 'sd-f') { o.filter = el.value; render(); }
+  else if (el.id === 'lib-stage') { o.libStage = el.value; render(); }
+  else if (el.id === 'lib-prog') { o.libProg = el.value; render(); }
+  else if (el.id === 'sd-mark') { o.mark = el.checked; }
+  else if (el.id === 'sv-stage') { o.saveStage = el.value; }
+  else if (el.id === 'sv-prog') { o.saveProg = el.value; }
+});
+document.addEventListener('input', function (ev) {
+  var el = ev.target; if (!el || !S.send || S.screen !== 'send') return;
+  if (el.id === 'msgbox') { S.send.body = el.value; sendRefreshPreview(); }
+  else if (el.id === 'sv-name') { S.send.saveName = el.value; }
+});
+</script>

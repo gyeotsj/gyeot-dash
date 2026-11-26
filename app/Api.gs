@@ -6,7 +6,9 @@
  *  - 화면에서 온 값은 믿지 않는다. 열 허용 목록(Schema.gs)으로 다시 검사하고,
  *    updated_by 와 시각은 서버가 채운다.
  *  - 오류는 "[코드] 문구" 형태로 던진다. 코드: LOGIN_REQUIRED, NOT_STAFF, OWNER_ONLY, NOT_FOUND,
- *    CONFLICT, INVALID, CANCELLED, DUPLICATE
+ *    CONFLICT, INVALID, CANCELLED, DUPLICATE, RRN_CHECK(주민번호가 성별·출생연도와 맞지 않아 확인이 필요)
+ *  - 주민번호는 이 파일에서 다루지 않는다 (Rrn.gs). 이 파일의 함수가 주민번호를 지울 때는 rrnClean_ 만 부르고,
+ *    실패하면 돌려주는 행에 _warn(안내 문구)을 붙인다.
  *  - 감사 기록에는 누가·무엇을·대상 ID만 남기고 값(이름, 연락처 등)은 남기지 않는다.
  */
 
@@ -32,6 +34,7 @@ function requireOwner_() {
 function getBootstrap() {
   var who = requireStaff_();
   var cfg = readConfig_();
+  var sessions = readTab_('Sessions'), people = readTab_('People'), enrollments = readTab_('Enrollments');
   return {
     me: { email: who.email, name: who.row.name, role: who.row.role },
     now: nowStr_(),
@@ -42,9 +45,14 @@ function getBootstrap() {
       legacy_imported: cfg.legacy_imported === 'Y'
     },
     programs: readTab_('Programs'),
-    sessions: readTab_('Sessions'),
-    people: readTab_('People'),
-    enrollments: readTab_('Enrollments'),
+    sessions: sessions,
+    people: people,
+    enrollments: enrollments,
+    // 주민번호는 값이 아니라 상태만 보낸다: 참여기록ID → ok(보관 중) / missing(없음) / check(확인 필요). 읽지 못하면 null
+    rrnStatus: rrnStatusMap_(enrollments, people, sessions),
+    // 저장한 문구(자리표시자 상태)와 최근 발송 기록 50건. 받는 사람의 이름·연락처·주민번호는 없다.
+    templates: readTab_('Templates'),
+    messageLog: readTab_('MessageLog').sort(function (a, b) { return String(b.at) < String(a.at) ? -1 : (String(b.at) > String(a.at) ? 1 : 0); }).slice(0, 50),
     staff: who.owner ? readTab_('Staff') : null
   };
 }
@@ -57,14 +65,30 @@ function sessionById_(sessionId) {
   return found;
 }
 
-/** 참석 여부는 프로그램이 시작된 뒤에만 입력할 수 있다 */
-function assertStarted_(sessionId, today) {
+/** 참석 여부·만족도 응답은 프로그램이 시작된 뒤에만 입력할 수 있다 */
+function assertStarted_(sessionId, today, label) {
   var s = sessionById_(sessionId);
-  if (today < s.start) throw apiError('INVALID', '프로그램이 시작된 뒤에 참석 여부를 입력할 수 있어요.');
+  if (today < s.start) throw apiError('INVALID', '프로그램이 시작된 뒤에 ' + (label || '참석 여부') + '를 입력할 수 있어요.');
+}
+
+/** 만족도 열(sat_at)이 시트 머리글에 있는지. 2단계에서 추가된 열이라 기존 시트는 소유자가 "스키마 확장"을 눌러야 생긴다. */
+function assertSatColumn_() {
+  var sh = openDb_().getSheetByName('Enrollments');
+  var idx = SCHEMA.Enrollments.cols.indexOf('sat_at') + 1;
+  if (String(sh.getRange(1, idx).getValue()) !== 'sat_at') {
+    throw apiError('INVALID', '만족도 열이 아직 없어요. 소유자가 시스템 상태에서 "스키마 확장"을 눌러 주세요.');
+  }
+}
+
+/** 이 단계를 지금 입력할 수 있는지 확인한다 (시작 전 회차의 참석·만족도, 만족도 열 준비 여부) */
+function assertStepAllowed_(step, sessionId, today) {
+  if (step === 'sat') assertSatColumn_();
+  if (step === 'attend') assertStarted_(sessionId, today);
+  if (step === 'sat') assertStarted_(sessionId, today, '만족도 응답');
 }
 
 /**
- * 단계 체크. step: m1 | pay | ins | m2 | attend
+ * 단계 체크. step: m1 | pay | ins | m2 | attend | sat(만족도 응답)
  * 날짜 단계는 value=true면 오늘 날짜(이미 있으면 그대로), false면 비움. 참석은 '참석' | '불참' | ''
  */
 function setStep(enrollId, step, value, expectedUpdatedAt) {
@@ -75,7 +99,7 @@ function setStep(enrollId, step, value, expectedUpdatedAt) {
 
   var res = updateRowByKey_('Enrollments', enrollId, function (cur) {
     if (cur.cancel_reason) throw apiError('CANCELLED', '취소된 참여자는 단계를 바꿀 수 없어요.');
-    if (step === 'attend') assertStarted_(cur.session_id, today);
+    assertStepAllowed_(step, cur.session_id, today);
     var on = (value === true || value === 'true');
     if (def.kind === 'date' && on && cur[def.col]) return {};   // 이미 완료: 날짜를 유지
     try {
@@ -86,6 +110,11 @@ function setStep(enrollId, step, value, expectedUpdatedAt) {
   }, expectedUpdatedAt, who.email);
 
   if (res.changed.length) audit_('step', enrollId, step + ' → ' + (res.row[def.col] ? (def.kind === 'attend' ? res.row[def.col] : '완료') : '해제'));
+  // 보험 가입이 끝나면 주민번호는 더 필요 없다: 바로 지운다 (R5). 지우지 못하면 화면에 알린다.
+  if (step === 'ins' && (value === true || value === 'true')) {
+    var warn = rrnClean_([enrollId]);
+    if (warn) res.row._warn = warn;
+  }
   return res.row;
 }
 
@@ -101,6 +130,11 @@ function updateEnrollment(enrollId, patch, expectedUpdatedAt) {
   }, expectedUpdatedAt, who.email);
 
   if (res.changed.length) audit_('update_enrollment', enrollId, '항목: ' + res.changed.join(', '));
+  // 신청이 취소되면 주민번호를 바로 지운다 (R5)
+  if (res.row.cancel_reason && res.changed.indexOf('cancel_reason') >= 0) {
+    var warn = rrnClean_([enrollId]);
+    if (warn) res.row._warn = warn;
+  }
   return res.row;
 }
 
@@ -136,10 +170,13 @@ function bulkSetStep(sessionId, step, value, enrollIds) {
   var today = todayKst();
   var on = (value === true || value === 'true');
 
+  var matched = [];   // 이 처리의 대상이 된 참여 기록 (보험을 켤 때 주민번호를 지울 대상)
   var changedRows = withLock_(function () {
-    if (step === 'attend') assertStarted_(sessionId, today);
+    assertStepAllowed_(step, sessionId, today);
     return bulkUpdateUnlocked_('Enrollments', function (r) {
-      return r.session_id === sessionId && !r.cancel_reason && (!ids || ids.indexOf(String(r.enroll_id)) >= 0);
+      var hit = r.session_id === sessionId && !r.cancel_reason && (!ids || ids.indexOf(String(r.enroll_id)) >= 0);
+      if (hit) matched.push(r.enroll_id);
+      return hit;
     }, function (r) {
       if (def.kind === 'date' && on && r[def.col]) return {};
       try { return stepPatch(step, value, today); } catch (e) { throw apiError('INVALID', e.message); }
@@ -147,6 +184,10 @@ function bulkSetStep(sessionId, step, value, enrollIds) {
   });
 
   if (changedRows.length) audit_('bulk_step', sessionId, step + ' · ' + changedRows.length + '명');
+  if (step === 'ins' && on && matched.length) {
+    var warn = rrnClean_(matched);
+    if (warn && changedRows.length) changedRows[0]._warn = warn;
+  }
   return changedRows;
 }
 
